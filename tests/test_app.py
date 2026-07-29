@@ -17,6 +17,14 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Python Chess Engine", response.data)
 
+    def test_home_page_includes_all_promotion_choices(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'id="promotionDialog"', response.data)
+            for piece in (b"q", b"r", b"b", b"n"):
+                with self.subTest(piece=piece):
+                    self.assertIn(b'data-promotion="' + piece + b'"', response.data)
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):
