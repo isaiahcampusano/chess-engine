@@ -1,4 +1,3 @@
-import time
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +30,7 @@ class WebAppTests(unittest.TestCase):
             move=chess.Move.from_uci("e7e5"),
             score=24,
             nodes=1_234,
+            depth=3,
         )
 
         with patch("app.choose_best_move", return_value=result) as search:
@@ -43,12 +43,15 @@ class WebAppTests(unittest.TestCase):
                 "engine_move": "e7e5",
                 "score": 24,
                 "nodes": 1_234,
+                "depth": 3,
+                "timed_out": False,
                 "game_over": False,
             },
         )
-        searched_board, depth = search.call_args.args
+        searched_board = search.call_args.args[0]
         self.assertEqual(searched_board.fen(), board.fen())
-        self.assertEqual(depth, 3)
+        self.assertEqual(search.call_args.kwargs["depth"], 3)
+        self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 8.0)
 
     def test_move_endpoint_rejects_missing_json(self) -> None:
         response = self.client.post("/move")
@@ -89,6 +92,8 @@ class WebAppTests(unittest.TestCase):
                 "engine_move": None,
                 "score": 0,
                 "nodes": 0,
+                "depth": 0,
+                "timed_out": False,
                 "game_over": True,
             },
         )
@@ -112,23 +117,21 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertIn("legal move", response.get_json()["error"])
 
-    def test_engine_timeout_returns_gateway_timeout(self) -> None:
-        def slow_search(_board, _depth):
-            time.sleep(0.03)
-            return SearchResult(
-                move=chess.Move.from_uci("e2e4"),
-                score=0,
-                nodes=1,
-            )
-
-        with (
-            patch("app.choose_best_move", side_effect=slow_search),
-            patch("app.SEARCH_TIMEOUT_SECONDS", 0.001),
-        ):
+    def test_timed_out_search_returns_best_available_move(self) -> None:
+        result = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=12,
+            nodes=80,
+            depth=1,
+            timed_out=True,
+        )
+        with patch("app.choose_best_move", return_value=result):
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
-        self.assertEqual(response.status_code, 504)
-        self.assertIn("within", response.get_json()["error"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["engine_move"], "e2e4")
+        self.assertEqual(response.get_json()["depth"], 1)
+        self.assertTrue(response.get_json()["timed_out"])
 
 
 if __name__ == "__main__":
