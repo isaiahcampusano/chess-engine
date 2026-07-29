@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101713">
+    <title>Python Chess Engine</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css"
+    >
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Minimax · Alpha-beta pruning</p>
+          <h1>Python Chess Engine</h1>
+          <p class="hero-copy">Play White against the engine. Drag a piece to make your move.</p>
+        </div>
+        <div class="depth-badge" aria-label="Engine search depth 3">
+          <span>Depth</span>
+          <strong>3</strong>
+        </div>
+      </header>
+
+      <div
+        id="dependencyAlert"
+        class="alert dependency-alert"
+        role="alert"
+        aria-live="assertive"
+      >
+        Loading the chess board…
+      </div>
+
+      <section class="game-layout" aria-label="Chess game">
+        <div class="board-column">
+          <div class="player-strip opponent">
+            <div class="player-icon" aria-hidden="true">AI</div>
+            <div>
+              <strong>Python Engine</strong>
+              <span>Black</span>
+            </div>
+            <span id="thinkingPill" class="thinking-pill" hidden>
+              <i aria-hidden="true"></i>
+              Thinking
+            </span>
+          </div>
+
+          <div class="board-frame">
+            <div id="myBoard" class="chessboard" aria-label="Interactive chess board"></div>
+            <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
+          </div>
+
+          <div class="player-strip">
+            <div class="player-icon human" aria-hidden="true">You</div>
+            <div>
+              <strong>You</strong>
+              <span>White</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="game-panel">
+          <section class="status-card" aria-labelledby="statusHeading">
+            <p class="panel-label">Game status</p>
+            <h2 id="statusHeading">Your move</h2>
+            <p id="statusDescription" class="status-description" role="status" aria-live="polite">
+              White to move.
+            </p>
+            <div id="errorBox" class="alert" role="alert" hidden></div>
+            <button id="retryButton" class="button secondary full-width" type="button" hidden>
+              Retry engine move
+            </button>
+          </section>
+
+          <section class="metrics" aria-label="Last engine search">
+            <div>
+              <span>Evaluation</span>
+              <strong id="evaluationValue">—</strong>
+            </div>
+            <div>
+              <span>Nodes searched</span>
+              <strong id="nodesValue">—</strong>
+            </div>
+          </section>
+
+          <section class="history-card" aria-labelledby="historyHeading">
+            <div class="panel-heading">
+              <div>
+                <p class="panel-label">Notation</p>
+                <h2 id="historyHeading">Move history</h2>
+              </div>
+              <span id="moveCount">0 moves</span>
+            </div>
+            <div id="moveHistory" class="move-history">
+              <p class="empty-history">Your moves will appear here.</p>
+            </div>
+          </section>
+
+          <button id="newGameButton" class="button primary full-width" type="button">
+            New game
+          </button>
+        </aside>
+      </section>
+
+      <footer>
+        <span>Powered by python-chess</span>
+        <span aria-hidden="true">•</span>
+        <span>Engine plays Black</span>
+      </footer>
+    </main>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+    <script type="module" src="/static/app.js"></script>
+    <script>
+      window.setTimeout(function () {
+        if (window.chessAppReady) return;
+        var alert = document.getElementById("dependencyAlert");
+        alert.textContent =
+          "The chess board could not load. Check your internet connection and refresh the page.";
+        alert.classList.add("is-error");
+      }, 8000);
+    </script>
+  </body>
+</html>
