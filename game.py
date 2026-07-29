@@ -70,9 +70,10 @@ def _print_status(board: chess.Board, depth: int, last_ai_result: SearchResult |
     side = "White" if board.turn == chess.WHITE else "Black"
     print(f"Python Chess Engine | AI depth: {depth} | Turn: {side}")
     if last_ai_result and last_ai_result.move:
+        score_pawns = last_ai_result.score / 100.0
         print(
             f"Last AI move: {last_ai_result.move.uci()} | "
-            f"score {last_ai_result.score} | searched {last_ai_result.nodes} nodes"
+            f"score {score_pawns:+.2f} pawns | searched {last_ai_result.nodes} nodes"
         )
     if board.is_check():
         print(f"{side} is in check.")
