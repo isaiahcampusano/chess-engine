@@ -35,6 +35,16 @@ A successful search returns the engine move in UCI notation with search statisti
 
 Searches are limited to 10 seconds. If a search times out, the page keeps the current position and offers a retry button.
 
+## Deploy on Render
+
+The included `render.yaml` configures a free Render web service with Gunicorn:
+
+1. Sign in to [Render](https://dashboard.render.com/).
+2. Create a new Blueprint and connect this GitHub repository.
+3. Approve the `isaiahcampusano-chess-engine` service.
+
+Render installs the dependencies, starts the Flask app, and provides a public `onrender.com` URL. Pushes to `main` automatically deploy after the Blueprint is connected. Free services sleep after 15 minutes without traffic and can take about a minute to wake up.
+
 ## Run in the Terminal
 
 ```bash
