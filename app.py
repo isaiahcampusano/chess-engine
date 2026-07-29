@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-
 import chess
 from flask import Flask, jsonify, request
 
@@ -11,8 +9,7 @@ from engine import choose_best_move
 
 
 ENGINE_DEPTH = 3
-SEARCH_TIMEOUT_SECONDS = 10
-SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="chess-engine")
+ENGINE_TIME_LIMIT_SECONDS = 8.0
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -48,18 +45,17 @@ def handle_move():
                 "engine_move": None,
                 "score": 0,
                 "nodes": 0,
+                "depth": 0,
+                "timed_out": False,
                 "game_over": True,
             }
         )
 
-    future = SEARCH_EXECUTOR.submit(choose_best_move, board, ENGINE_DEPTH)
     try:
-        result = future.result(timeout=SEARCH_TIMEOUT_SECONDS)
-    except FutureTimeoutError:
-        future.cancel()
-        return _error(
-            f"The engine did not find a move within {SEARCH_TIMEOUT_SECONDS} seconds.",
-            504,
+        result = choose_best_move(
+            board,
+            depth=ENGINE_DEPTH,
+            time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
         )
     except Exception:
         app.logger.exception("Chess engine search failed")
@@ -74,6 +70,8 @@ def handle_move():
             "engine_move": result.move.uci(),
             "score": result.score,
             "nodes": result.nodes,
+            "depth": result.depth,
+            "timed_out": result.timed_out,
             "game_over": False,
         }
     )

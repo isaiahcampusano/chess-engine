@@ -14,6 +14,7 @@ const elements = {
   newGameButton: document.querySelector("#newGameButton"),
   nodesValue: document.querySelector("#nodesValue"),
   retryButton: document.querySelector("#retryButton"),
+  searchNotice: document.querySelector("#searchNotice"),
   statusDescription: document.querySelector("#statusDescription"),
   statusHeading: document.querySelector("#statusHeading"),
   thinkingPill: document.querySelector("#thinkingPill"),
@@ -140,6 +141,8 @@ async function requestEngineMove() {
     lastEngineStats = {
       score: Number(data.score),
       nodes: Number(data.nodes),
+      depth: Number(data.depth),
+      timedOut: Boolean(data.timed_out),
     };
   } catch (error) {
     if (requestId !== activeRequestId) {
@@ -193,8 +196,23 @@ function render() {
   elements.retryButton.hidden = !canRetry;
   elements.errorBox.hidden = !lastError;
   elements.errorBox.textContent = lastError;
+  const searchMessage = getSearchNotice();
+  elements.searchNotice.hidden = !searchMessage;
+  elements.searchNotice.textContent = searchMessage;
   elements.boardOverlay.hidden = !isThinking;
   elements.thinkingPill.hidden = !isThinking;
+}
+
+function getSearchNotice() {
+  if (!lastEngineStats?.timedOut) {
+    return "";
+  }
+
+  if (lastEngineStats.depth > 0) {
+    return `Time limit reached — played the best move found at depth ${lastEngineStats.depth}.`;
+  }
+
+  return "Time limit reached — played a safe legal move so the game can continue.";
 }
 
 function renderStatus() {
