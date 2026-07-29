@@ -17,7 +17,10 @@
         <div>
           <p class="eyebrow">Minimax · Alpha-beta pruning</p>
           <h1>Python Chess Engine</h1>
-          <p class="hero-copy">Play White against the engine. Drag a piece to make your move.</p>
+          <p class="hero-copy">
+            Play White against the engine. Select a piece to see its legal moves, then drag or
+            choose a destination.
+          </p>
         </div>
         <div class="depth-badge" aria-label="Engine search depth 3">
           <span>Depth</span>
@@ -49,7 +52,17 @@
           </div>
 
           <div class="board-frame">
-            <div id="myBoard" class="chessboard" aria-label="Interactive chess board"></div>
+            <p id="boardInstructions" class="sr-only">
+              Select a White piece by clicking it or pressing Enter. Legal destinations will be
+              announced and marked on the board. Use the arrow keys to move between squares,
+              Enter or Space to select, and Escape to cancel.
+            </p>
+            <div
+              id="myBoard"
+              class="chessboard"
+              aria-label="Interactive chess board"
+              aria-describedby="boardInstructions"
+            ></div>
             <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
           </div>
 

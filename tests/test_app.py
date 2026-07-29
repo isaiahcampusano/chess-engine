@@ -25,6 +25,13 @@ class WebAppTests(unittest.TestCase):
                 with self.subTest(piece=piece):
                     self.assertIn(b'data-promotion="' + piece + b'"', response.data)
 
+    def test_home_page_includes_accessible_board_instructions(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'id="boardInstructions"', response.data)
+            self.assertIn(b'aria-describedby="boardInstructions"', response.data)
+            self.assertIn(b"Use the arrow keys", response.data)
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):
