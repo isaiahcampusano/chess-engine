@@ -17,7 +17,10 @@
         <div>
           <p class="eyebrow">Minimax · Alpha-beta pruning</p>
           <h1>Python Chess Engine</h1>
-          <p class="hero-copy">Play White against the engine. Drag a piece to make your move.</p>
+          <p class="hero-copy">
+            Play White against the engine. Select a piece to see its legal moves, then drag or
+            choose a destination.
+          </p>
         </div>
         <div class="depth-badge" aria-label="Engine search depth 3">
           <span>Depth</span>
@@ -49,7 +52,17 @@
           </div>
 
           <div class="board-frame">
-            <div id="myBoard" class="chessboard" aria-label="Interactive chess board"></div>
+            <p id="boardInstructions" class="sr-only">
+              Select a White piece by clicking it or pressing Enter. Legal destinations will be
+              announced and marked on the board. Use the arrow keys to move between squares,
+              Enter or Space to select, and Escape to cancel.
+            </p>
+            <div
+              id="myBoard"
+              class="chessboard"
+              aria-label="Interactive chess board"
+              aria-describedby="boardInstructions"
+            ></div>
             <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
           </div>
 
@@ -112,6 +125,58 @@
         <span>Engine plays Black</span>
       </footer>
     </main>
+
+    <dialog
+      id="promotionDialog"
+      class="promotion-dialog"
+      aria-labelledby="promotionHeading"
+      aria-describedby="promotionDescription"
+    >
+      <div class="promotion-card">
+        <p class="panel-label">Pawn promotion</p>
+        <h2 id="promotionHeading">Choose your new piece</h2>
+        <p id="promotionDescription">
+          Your pawn reached the eighth rank. Select the piece it becomes.
+        </p>
+        <div class="promotion-options" aria-label="Promotion pieces">
+          <button type="button" class="promotion-option" data-promotion="q">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wQ.png"
+              alt=""
+            >
+            <span>Queen</span>
+            <kbd>Q</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="r">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wR.png"
+              alt=""
+            >
+            <span>Rook</span>
+            <kbd>R</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="b">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wB.png"
+              alt=""
+            >
+            <span>Bishop</span>
+            <kbd>B</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="n">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wN.png"
+              alt=""
+            >
+            <span>Knight</span>
+            <kbd>N</kbd>
+          </button>
+        </div>
+        <button id="cancelPromotionButton" class="button secondary full-width" type="button">
+          Cancel
+        </button>
+      </div>
+    </dialog>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
