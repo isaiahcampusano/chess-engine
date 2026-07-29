@@ -113,6 +113,58 @@
       </footer>
     </main>
 
+    <dialog
+      id="promotionDialog"
+      class="promotion-dialog"
+      aria-labelledby="promotionHeading"
+      aria-describedby="promotionDescription"
+    >
+      <div class="promotion-card">
+        <p class="panel-label">Pawn promotion</p>
+        <h2 id="promotionHeading">Choose your new piece</h2>
+        <p id="promotionDescription">
+          Your pawn reached the eighth rank. Select the piece it becomes.
+        </p>
+        <div class="promotion-options" aria-label="Promotion pieces">
+          <button type="button" class="promotion-option" data-promotion="q">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wQ.png"
+              alt=""
+            >
+            <span>Queen</span>
+            <kbd>Q</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="r">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wR.png"
+              alt=""
+            >
+            <span>Rook</span>
+            <kbd>R</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="b">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wB.png"
+              alt=""
+            >
+            <span>Bishop</span>
+            <kbd>B</kbd>
+          </button>
+          <button type="button" class="promotion-option" data-promotion="n">
+            <img
+              src="https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/wN.png"
+              alt=""
+            >
+            <span>Knight</span>
+            <kbd>N</kbd>
+          </button>
+        </div>
+        <button id="cancelPromotionButton" class="button secondary full-width" type="button">
+          Cancel
+        </button>
+      </div>
+    </dialog>
+
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
     <script type="module" src="/static/app.js"></script>
