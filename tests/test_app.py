@@ -49,6 +49,23 @@ class WebAppTests(unittest.TestCase):
 
             self.assertIn(b'aria-pressed="false"', response.data)
 
+    def test_home_page_includes_post_game_analysis_ui(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            for element_id in (
+                b"reviewGameButton",
+                b"analysisPanel",
+                b"analysisGraph",
+                b"analysisMoveList",
+                b"whiteAccuracy",
+                b"blackAccuracy",
+                b"analysisBestLine",
+                b"previousAnalysisButton",
+                b"nextAnalysisButton",
+            ):
+                with self.subTest(element_id=element_id):
+                    self.assertIn(b'id="' + element_id + b'"', response.data)
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):
@@ -164,6 +181,34 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.get_json()["engine_move"], "e2e4")
         self.assertEqual(response.get_json()["depth"], 1)
         self.assertTrue(response.get_json()["timed_out"])
+
+    def test_analysis_endpoint_returns_review_data(self) -> None:
+        analysis_result = {
+            "engine": "Test engine",
+            "moves": [{"san": "e4", "classification": "best"}],
+            "evaluations": [{"ply": 0, "evaluation_cp": 0}],
+            "summary": {"white_accuracy": 100.0, "black_accuracy": 100.0},
+        }
+        with patch("app.analyse_game", return_value=analysis_result) as analyze:
+            response = self.client.post(
+                "/analysis",
+                json={"moves": ["e2e4"], "start_fen": chess.STARTING_FEN},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), analysis_result)
+        analyze.assert_called_once_with(["e2e4"], start_fen=chess.STARTING_FEN)
+
+    def test_analysis_endpoint_rejects_missing_moves(self) -> None:
+        response = self.client.post("/analysis", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("'moves'", response.get_json()["error"])
+
+    def test_analysis_endpoint_rejects_invalid_game(self) -> None:
+        with patch("app.analyse_game", side_effect=ValueError("Move 1 is not legal.")):
+            response = self.client.post("/analysis", json={"moves": ["e2e5"]})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not legal", response.get_json()["error"])
 
 
 if __name__ == "__main__":
