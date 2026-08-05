@@ -55,14 +55,22 @@
             <p id="boardInstructions" class="sr-only">
               Select a White piece by clicking it or pressing Enter. Legal destinations will be
               announced and marked on the board. Use the arrow keys to move between squares,
-              Enter or Space to select, and Escape to cancel.
+              Enter or Space to select, and Escape to cancel. In planning mode, select a piece
+              belonging to the side to move and build a hypothetical sequence.
             </p>
             <div
               id="myBoard"
               class="chessboard"
               aria-label="Interactive chess board"
               aria-describedby="boardInstructions"
-            ></div>
+            >
+              <svg
+                id="planningArrows"
+                class="planning-arrows"
+                aria-hidden="true"
+                hidden
+              ></svg>
+            </div>
             <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
           </div>
 
@@ -112,6 +120,33 @@
               <p class="empty-history">Your moves will appear here.</p>
             </div>
           </section>
+
+          <section id="planningCard" class="planning-card" aria-labelledby="planningHeading" hidden>
+            <div class="panel-heading">
+              <div>
+                <p class="panel-label">Analysis mode</p>
+                <h2 id="planningHeading">Planned sequence</h2>
+              </div>
+              <span id="planningMoveCount">0 moves</span>
+            </div>
+            <p id="planningSequence" class="planning-sequence" aria-live="polite">
+              Select the side-to-move's piece to begin.
+            </p>
+            <div class="planning-controls">
+              <button id="undoPlanButton" class="button secondary" type="button">Undo</button>
+              <button id="clearPlanButton" class="button secondary" type="button">Clear</button>
+              <button id="copyPlanButton" class="button secondary" type="button">Copy</button>
+            </div>
+          </section>
+
+          <button
+            id="planMovesButton"
+            class="button secondary full-width"
+            type="button"
+            aria-pressed="false"
+          >
+            Plan moves
+          </button>
 
           <button id="newGameButton" class="button primary full-width" type="button">
             New game
