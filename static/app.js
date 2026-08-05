@@ -15,6 +15,62 @@ const PIECE_NAMES = {
   q: "queen",
   k: "king",
 };
+
+class MovePredictor {
+  constructor(boardState) {
+    this.baseFen = MovePredictor.fenFrom(boardState);
+    this.legalMoveCache = new Map();
+  }
+
+  static fenFrom(boardState) {
+    return typeof boardState === "string" ? boardState : boardState.fen();
+  }
+
+  getLegalMovesFromSquare(square, boardState = this.baseFen) {
+    const fen = MovePredictor.fenFrom(boardState);
+    const cacheKey = `${fen}|${square}`;
+    if (!this.legalMoveCache.has(cacheKey)) {
+      const position = new Chess(fen);
+      this.legalMoveCache.set(cacheKey, position.moves({ square, verbose: true }));
+    }
+    return this.legalMoveCache.get(cacheKey).map((move) => ({ ...move }));
+  }
+
+  getMovePath(startSquare, endSquare) {
+    const startFile = BOARD_FILES.indexOf(startSquare[0]);
+    const startRank = Number(startSquare[1]);
+    const endFile = BOARD_FILES.indexOf(endSquare[0]);
+    const endRank = Number(endSquare[1]);
+    const fileDistance = endFile - startFile;
+    const rankDistance = endRank - startRank;
+    const isStraight = fileDistance === 0 || rankDistance === 0;
+    const isDiagonal = Math.abs(fileDistance) === Math.abs(rankDistance);
+    if (!isStraight && !isDiagonal) {
+      return [];
+    }
+
+    const fileStep = Math.sign(fileDistance);
+    const rankStep = Math.sign(rankDistance);
+    const path = [];
+    let file = startFile + fileStep;
+    let rank = startRank + rankStep;
+    while (file !== endFile || rank !== endRank) {
+      path.push(`${BOARD_FILES[file]}${rank}`);
+      file += fileStep;
+      rank += rankStep;
+    }
+    return path;
+  }
+
+  predictBoardStateAfterMove(move, boardState = this.baseFen) {
+    const prediction = new Chess(MovePredictor.fenFrom(boardState));
+    const completedMove = prediction.move(move);
+    if (!completedMove) {
+      throw new Error("The planned move is not legal in this position.");
+    }
+    return { board: prediction, move: completedMove };
+  }
+}
 const localTestName = ["127.0.0.1", "localhost"].includes(window.location.hostname)
   ? new URLSearchParams(window.location.search).get("test")
   : null;
@@ -26,6 +82,8 @@ const promotionTestFen = {
 const elements = {
   board: document.querySelector("#myBoard"),
   boardOverlay: document.querySelector("#boardOverlay"),
+  clearPlanButton: document.querySelector("#clearPlanButton"),
+  copyPlanButton: document.querySelector("#copyPlanButton"),
   cancelPromotionButton: document.querySelector("#cancelPromotionButton"),
   dependencyAlert: document.querySelector("#dependencyAlert"),
   errorBox: document.querySelector("#errorBox"),
@@ -36,11 +94,17 @@ const elements = {
   nodesValue: document.querySelector("#nodesValue"),
   promotionDialog: document.querySelector("#promotionDialog"),
   promotionOptions: document.querySelectorAll("[data-promotion]"),
+  planMovesButton: document.querySelector("#planMovesButton"),
+  planningArrows: document.querySelector("#planningArrows"),
+  planningCard: document.querySelector("#planningCard"),
+  planningMoveCount: document.querySelector("#planningMoveCount"),
+  planningSequence: document.querySelector("#planningSequence"),
   retryButton: document.querySelector("#retryButton"),
   searchNotice: document.querySelector("#searchNotice"),
   statusDescription: document.querySelector("#statusDescription"),
   statusHeading: document.querySelector("#statusHeading"),
   thinkingPill: document.querySelector("#thinkingPill"),
+  undoPlanButton: document.querySelector("#undoPlanButton"),
 };
 
 let game = createInitialGame();
@@ -58,6 +122,16 @@ let lastMove = null;
 let interactionMessage = "";
 let engineMoveAnnouncement = "";
 let dragInProgress = false;
+const planningState = {
+  isPlanning: false,
+  selectedSquare: null,
+  highlightedSquares: new Set(),
+  arrows: [],
+  moveSequence: [],
+  hypotheticalBoard: null,
+  baseFen: null,
+  predictor: null,
+};
 
 function initialize() {
   if (typeof window.jQuery !== "function" || typeof window.Chessboard !== "function") {
@@ -82,6 +156,10 @@ function initialize() {
   elements.board.addEventListener("keydown", handleBoardKeydown);
   elements.board.addEventListener("focusin", handleBoardFocus);
   elements.newGameButton.addEventListener("click", startNewGame);
+  elements.planMovesButton.addEventListener("click", togglePlanningMode);
+  elements.undoPlanButton.addEventListener("click", undoPlannedMove);
+  elements.clearPlanButton.addEventListener("click", clearPlanningSequence);
+  elements.copyPlanButton.addEventListener("click", copyPlanningSequence);
   elements.retryButton.addEventListener("click", requestEngineMove);
   elements.cancelPromotionButton.addEventListener("click", cancelPromotion);
   elements.promotionDialog.addEventListener("cancel", cancelPromotion);
@@ -92,6 +170,7 @@ function initialize() {
   window.addEventListener("resize", debounce(() => {
     board.resize();
     scheduleBoardAccessibilityRender();
+    renderPlanningArrows();
   }, 100));
 
   window.chessAppReady = true;
@@ -101,12 +180,13 @@ function initialize() {
 }
 
 function onDragStart(source, piece) {
+  const activeGame = getActiveGame();
   if (
     isThinking ||
     pendingPromotion ||
-    game.isGameOver() ||
-    game.turn() !== "w" ||
-    piece.startsWith("b")
+    activeGame.isGameOver() ||
+    (!planningState.isPlanning && activeGame.turn() !== "w") ||
+    !piece.toLowerCase().startsWith(activeGame.turn())
   ) {
     return false;
   }
@@ -138,7 +218,7 @@ function onDrop(source, target) {
     return "snapback";
   }
 
-  if (playPlayerMove({ from: source, to: target })) {
+  if (playActiveMove({ from: source, to: target })) {
     return undefined;
   }
 
@@ -174,13 +254,51 @@ function playPlayerMove(moveOptions) {
   return true;
 }
 
+function playActiveMove(moveOptions) {
+  return planningState.isPlanning
+    ? playPlannedMove(moveOptions)
+    : playPlayerMove(moveOptions);
+}
+
+function playPlannedMove(moveOptions) {
+  const beforeFen = planningState.hypotheticalBoard.fen();
+  let prediction;
+  try {
+    prediction = planningState.predictor.predictBoardStateAfterMove(
+      moveOptions,
+      planningState.hypotheticalBoard,
+    );
+  } catch {
+    return false;
+  }
+
+  planningState.hypotheticalBoard = prediction.board;
+  planningState.moveSequence.push({
+    ...prediction.move,
+    beforeFen,
+    afterFen: prediction.board.fen(),
+  });
+  planningState.arrows.push({
+    from: prediction.move.from,
+    to: prediction.move.to,
+    color: "yellow",
+  });
+  focusedSquare = prediction.move.to;
+  clearSelection(false);
+  interactionMessage = "";
+  syncBoard();
+  render();
+  return true;
+}
+
 function isPromotionAttempt(source, target) {
-  const piece = game.get(source);
-  return piece?.type === "p" && piece.color === "w" && target.endsWith("8");
+  const piece = getActiveGame().get(source);
+  const promotionRank = piece?.color === "w" ? "8" : "1";
+  return piece?.type === "p" && target.endsWith(promotionRank);
 }
 
 function isLegalPromotionTarget(source, target) {
-  return game.moves({ verbose: true }).some(
+  return getActiveGame().moves({ verbose: true }).some(
     (move) => move.from === source && move.to === target && PROMOTION_PIECES.has(move.promotion),
   );
 }
@@ -202,7 +320,7 @@ function choosePromotion(event) {
   pendingPromotion = null;
   elements.promotionDialog.close();
 
-  if (!playPlayerMove(moveOptions)) {
+  if (!playActiveMove(moveOptions)) {
     lastError = "That promotion is no longer legal. Please try the move again.";
     syncBoard();
     render();
@@ -279,40 +397,48 @@ function handleBoardKeydown(event) {
     return;
   }
 
-  if (event.key === "Escape" && selectedSquare) {
+  if (event.key === "Escape" && getSelectedSquare()) {
     event.preventDefault();
     clearSelection();
   }
 }
 
 function activateSquare(square) {
-  if (isThinking || pendingPromotion || game.isGameOver() || game.turn() !== "w") {
+  const activeGame = getActiveGame();
+  const activeSelectedSquare = getSelectedSquare();
+  const activeSelectedMoves = getSelectedMoves();
+  if (
+    isThinking ||
+    pendingPromotion ||
+    activeGame.isGameOver() ||
+    (!planningState.isPlanning && activeGame.turn() !== "w")
+  ) {
     return;
   }
 
-  const piece = game.get(square);
-  if (!selectedSquare) {
+  const piece = activeGame.get(square);
+  if (!activeSelectedSquare) {
     selectPiece(square);
     return;
   }
 
-  if (square === selectedSquare) {
+  if (square === activeSelectedSquare) {
     clearSelection();
     return;
   }
 
-  const matchingMoves = selectedMoves.filter((move) => move.to === square);
+  const matchingMoves = activeSelectedMoves.filter((move) => move.to === square);
   if (matchingMoves.length > 0) {
     if (matchingMoves.some((move) => PROMOTION_PIECES.has(move.promotion))) {
-      openPromotionChooser(selectedSquare, square);
+      openPromotionChooser(activeSelectedSquare, square);
       return;
     }
 
-    playPlayerMove({ from: selectedSquare, to: square });
+    playActiveMove({ from: activeSelectedSquare, to: square });
     return;
   }
 
-  if (piece?.color === "w") {
+  if (piece?.color === activeGame.turn()) {
     selectPiece(square);
     return;
   }
@@ -322,24 +448,34 @@ function activateSquare(square) {
 }
 
 function selectPiece(square) {
-  const piece = game.get(square);
+  const activeGame = getActiveGame();
+  const piece = activeGame.get(square);
   if (
     !piece ||
-    piece.color !== "w" ||
+    piece.color !== activeGame.turn() ||
     isThinking ||
     pendingPromotion ||
-    game.isGameOver() ||
-    game.turn() !== "w"
+    activeGame.isGameOver() ||
+    (!planningState.isPlanning && activeGame.turn() !== "w")
   ) {
+    const sideToMove = activeGame.turn() === "w" ? "White" : "Black";
     interactionMessage = piece
-      ? "You can only select one of your White pieces."
-      : `${square} is empty. Select one of your White pieces first.`;
+      ? `Select one of ${sideToMove}'s pieces.`
+      : `${square} is empty. Select one of ${sideToMove}'s pieces first.`;
     render();
     return false;
   }
 
-  selectedSquare = square;
-  selectedMoves = game.moves({ square, verbose: true });
+  const legalMoves = planningState.isPlanning
+    ? planningState.predictor.getLegalMovesFromSquare(square, activeGame)
+    : activeGame.moves({ square, verbose: true });
+  if (planningState.isPlanning) {
+    planningState.selectedSquare = square;
+    planningState.highlightedSquares = new Set(legalMoves.map((move) => move.to));
+  } else {
+    selectedSquare = square;
+  }
+  selectedMoves = legalMoves;
   focusedSquare = square;
   interactionMessage = "";
   render();
@@ -347,12 +483,29 @@ function selectPiece(square) {
 }
 
 function clearSelection(shouldRender = true) {
-  selectedSquare = null;
+  if (planningState.isPlanning) {
+    planningState.selectedSquare = null;
+    planningState.highlightedSquares.clear();
+  } else {
+    selectedSquare = null;
+  }
   selectedMoves = [];
   interactionMessage = "";
   if (shouldRender) {
     render();
   }
+}
+
+function getActiveGame() {
+  return planningState.isPlanning ? planningState.hypotheticalBoard : game;
+}
+
+function getSelectedSquare() {
+  return planningState.isPlanning ? planningState.selectedSquare : selectedSquare;
+}
+
+function getSelectedMoves() {
+  return selectedMoves;
 }
 
 function offsetSquare(square, fileDelta, rankDelta) {
@@ -383,10 +536,17 @@ function squareNameFromElement(element) {
 
 function scheduleBoardAccessibilityRender() {
   renderBoardAccessibility();
-  window.requestAnimationFrame(renderBoardAccessibility);
+  renderPlanningArrows();
+  window.requestAnimationFrame(() => {
+    renderBoardAccessibility();
+    renderPlanningArrows();
+  });
 }
 
 function renderBoardAccessibility() {
+  const activeGame = getActiveGame();
+  const activeSelectedSquare = getSelectedSquare();
+  const activeSelectedMoves = getSelectedMoves();
   const squares = elements.board.querySelectorAll(".square-55d63");
   squares.forEach((element) => {
     const square = squareNameFromElement(element);
@@ -394,10 +554,17 @@ function renderBoardAccessibility() {
       return;
     }
 
-    const matchingMoves = selectedMoves.filter((move) => move.to === square);
+    const matchingMoves = activeSelectedMoves.filter((move) => move.to === square);
     const isCapture = matchingMoves.some((move) => Boolean(move.captured));
 
-    element.classList.toggle("is-selected", square === selectedSquare);
+    element.classList.toggle(
+      "is-selected",
+      !planningState.isPlanning && square === activeSelectedSquare,
+    );
+    element.classList.toggle(
+      "is-planning-selected",
+      planningState.isPlanning && square === activeSelectedSquare,
+    );
     element.classList.toggle(
       "is-legal-move",
       matchingMoves.length > 0 && !isCapture,
@@ -414,24 +581,101 @@ function renderBoardAccessibility() {
     element.setAttribute("role", "gridcell");
     element.setAttribute("aria-rowindex", String(9 - Number(square[1])));
     element.setAttribute("aria-colindex", String(BOARD_FILES.indexOf(square[0]) + 1));
-    element.setAttribute("aria-selected", String(square === selectedSquare));
+    element.setAttribute("aria-selected", String(square === activeSelectedSquare));
     element.setAttribute(
       "aria-disabled",
-      String(isThinking || game.isGameOver() || game.turn() !== "w"),
+      String(
+        isThinking ||
+        activeGame.isGameOver() ||
+        (!planningState.isPlanning && activeGame.turn() !== "w"),
+      ),
     );
     element.setAttribute("aria-label", describeSquare(square, matchingMoves));
     element.tabIndex = square === focusedSquare ? 0 : -1;
   });
 }
 
+function renderPlanningArrows() {
+  elements.board.classList.toggle("is-planning", planningState.isPlanning);
+  if (!planningState.isPlanning) {
+    elements.planningArrows.setAttribute("hidden", "");
+    elements.planningArrows.replaceChildren();
+    return;
+  }
+
+  elements.board.append(elements.planningArrows);
+  elements.planningArrows.removeAttribute("hidden");
+  elements.planningArrows.setAttribute("viewBox", "0 0 100 100");
+
+  const namespace = "http://www.w3.org/2000/svg";
+  const definitions = document.createElementNS(namespace, "defs");
+  const marker = document.createElementNS(namespace, "marker");
+  marker.setAttribute("id", "planningArrowHead");
+  marker.setAttribute("viewBox", "0 0 10 10");
+  marker.setAttribute("refX", "8");
+  marker.setAttribute("refY", "5");
+  marker.setAttribute("markerWidth", "5");
+  marker.setAttribute("markerHeight", "5");
+  marker.setAttribute("orient", "auto-start-reverse");
+  const arrowHead = document.createElementNS(namespace, "path");
+  arrowHead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+  arrowHead.setAttribute("fill", "#ffd84d");
+  marker.append(arrowHead);
+  definitions.append(marker);
+
+  const arrows = [
+    ...planningState.arrows.map((arrow) => ({ ...arrow, kind: "committed" })),
+    ...getSelectedMoves().map((move) => ({
+      from: move.from,
+      to: move.to,
+      color: "yellow",
+      kind: "candidate",
+    })),
+  ];
+
+  const nodes = [definitions];
+  arrows.forEach((arrow) => {
+    const geometry = arrowGeometry(arrow.from, arrow.to);
+    const line = document.createElementNS(namespace, "line");
+    line.setAttribute("x1", geometry.x1);
+    line.setAttribute("y1", geometry.y1);
+    line.setAttribute("x2", geometry.x2);
+    line.setAttribute("y2", geometry.y2);
+    line.setAttribute("marker-end", "url(#planningArrowHead)");
+    line.setAttribute("class", `planning-arrow is-${arrow.kind}`);
+    nodes.push(line);
+  });
+  elements.planningArrows.replaceChildren(...nodes);
+}
+
+function arrowGeometry(from, to) {
+  const point = (square) => ({
+    x: (BOARD_FILES.indexOf(square[0]) + 0.5) * 12.5,
+    y: (8 - Number(square[1]) + 0.5) * 12.5,
+  });
+  const start = point(from);
+  const end = point(to);
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const distance = Math.hypot(deltaX, deltaY) || 1;
+  const endPadding = 3.4;
+  return {
+    x1: start.x,
+    y1: start.y,
+    x2: end.x - (deltaX / distance) * endPadding,
+    y2: end.y - (deltaY / distance) * endPadding,
+  };
+}
+
 function describeSquare(square, matchingMoves) {
-  const piece = game.get(square);
+  const piece = getActiveGame().get(square);
+  const activeSelectedSquare = getSelectedSquare();
   const descriptions = [
     square,
     piece ? `${piece.color === "w" ? "White" : "Black"} ${PIECE_NAMES[piece.type]}` : "empty",
   ];
 
-  if (square === selectedSquare) {
+  if (square === activeSelectedSquare) {
     descriptions.push("selected");
   }
   if (matchingMoves.length > 0) {
@@ -452,12 +696,12 @@ function describeSquare(square, matchingMoves) {
 }
 
 function syncBoard(useAnimation = true) {
-  board.position(game.fen(), useAnimation);
+  board.position(getActiveGame().fen(), useAnimation);
   scheduleBoardAccessibilityRender();
 }
 
 async function requestEngineMove() {
-  if (isThinking || game.isGameOver() || game.turn() !== "b") {
+  if (planningState.isPlanning || isThinking || game.isGameOver() || game.turn() !== "b") {
     return;
   }
 
@@ -543,6 +787,123 @@ function parseUciMove(uci) {
   };
 }
 
+function togglePlanningMode() {
+  if (planningState.isPlanning) {
+    exitPlanningMode();
+    return;
+  }
+
+  if (isThinking || pendingPromotion || game.isGameOver()) {
+    return;
+  }
+
+  clearSelection(false);
+  planningState.isPlanning = true;
+  planningState.baseFen = game.fen();
+  planningState.hypotheticalBoard = new Chess(planningState.baseFen);
+  planningState.predictor = new MovePredictor(planningState.baseFen);
+  planningState.selectedSquare = null;
+  planningState.highlightedSquares.clear();
+  planningState.arrows = [];
+  planningState.moveSequence = [];
+  interactionMessage = "";
+  syncBoard(false);
+  render();
+}
+
+function exitPlanningMode() {
+  pendingPromotion = null;
+  if (elements.promotionDialog.open) {
+    elements.promotionDialog.close();
+  }
+  planningState.isPlanning = false;
+  planningState.selectedSquare = null;
+  planningState.highlightedSquares.clear();
+  planningState.arrows = [];
+  planningState.moveSequence = [];
+  planningState.hypotheticalBoard = null;
+  planningState.baseFen = null;
+  planningState.predictor = null;
+  selectedMoves = [];
+  interactionMessage = "";
+  syncBoard(false);
+  render();
+}
+
+function clearPlanningSequence() {
+  if (!planningState.isPlanning) {
+    return;
+  }
+
+  planningState.hypotheticalBoard = new Chess(planningState.baseFen);
+  planningState.moveSequence = [];
+  planningState.arrows = [];
+  clearSelection(false);
+  interactionMessage = "Planning reset to the live position.";
+  syncBoard(false);
+  render();
+}
+
+function undoPlannedMove() {
+  if (!planningState.isPlanning || planningState.moveSequence.length === 0) {
+    return;
+  }
+
+  const undoneMove = planningState.moveSequence.pop();
+  planningState.arrows.pop();
+  planningState.hypotheticalBoard = new Chess(undoneMove.beforeFen);
+  clearSelection(false);
+  focusedSquare = undoneMove.from;
+  interactionMessage = `Removed ${undoneMove.san} from the plan.`;
+  syncBoard(false);
+  render();
+}
+
+async function copyPlanningSequence() {
+  const notation = formatPlanningSequence();
+  if (!notation) {
+    interactionMessage = "Add at least one move before copying the plan.";
+    render();
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(notation);
+    interactionMessage = "Planned sequence copied to the clipboard.";
+  } catch {
+    interactionMessage = "The browser could not copy the sequence. Select the notation manually.";
+  }
+  render();
+}
+
+function formatPlanningSequence() {
+  if (!planningState.baseFen || planningState.moveSequence.length === 0) {
+    return "";
+  }
+
+  const fenParts = planningState.baseFen.split(" ");
+  let turn = fenParts[1];
+  let moveNumber = Number(fenParts[5]);
+  const groups = [];
+
+  planningState.moveSequence.forEach((move) => {
+    if (turn === "w") {
+      groups.push(`${moveNumber}. ${move.san}`);
+      turn = "b";
+    } else {
+      if (groups.length > 0 && !groups.at(-1).includes("...")) {
+        groups[groups.length - 1] += ` ${move.san}`;
+      } else {
+        groups.push(`${moveNumber}... ${move.san}`);
+      }
+      moveNumber += 1;
+      turn = "w";
+    }
+  });
+
+  return groups.join(" ");
+}
+
 function startNewGame() {
   activeRequestId += 1;
   pendingController?.abort();
@@ -559,6 +920,14 @@ function startNewGame() {
   selectedSquare = null;
   selectedMoves = [];
   interactionMessage = "";
+  planningState.isPlanning = false;
+  planningState.selectedSquare = null;
+  planningState.highlightedSquares.clear();
+  planningState.arrows = [];
+  planningState.moveSequence = [];
+  planningState.hypotheticalBoard = null;
+  planningState.baseFen = null;
+  planningState.predictor = null;
   game = createInitialGame();
   focusedSquare = promotionTestFen ? "a7" : "e2";
   syncBoard(false);
@@ -569,17 +938,42 @@ function render() {
   renderStatus();
   renderHistory();
   renderStats();
+  renderPlanningPanel();
 
-  const canRetry = Boolean(lastError) && !game.isGameOver() && game.turn() === "b";
+  const canRetry =
+    !planningState.isPlanning &&
+    Boolean(lastError) &&
+    !game.isGameOver() &&
+    game.turn() === "b";
   elements.retryButton.hidden = !canRetry;
-  elements.errorBox.hidden = !lastError;
+  elements.errorBox.hidden = planningState.isPlanning || !lastError;
   elements.errorBox.textContent = lastError;
   const searchMessage = getSearchNotice();
-  elements.searchNotice.hidden = !searchMessage;
+  elements.searchNotice.hidden = planningState.isPlanning || !searchMessage;
   elements.searchNotice.textContent = searchMessage;
   elements.boardOverlay.hidden = !isThinking;
   elements.thinkingPill.hidden = !isThinking;
+  elements.planMovesButton.disabled = isThinking || Boolean(pendingPromotion) || game.isGameOver();
+  elements.planMovesButton.setAttribute("aria-pressed", String(planningState.isPlanning));
+  elements.planMovesButton.textContent = planningState.isPlanning
+    ? "Exit planning"
+    : "Plan moves";
   scheduleBoardAccessibilityRender();
+}
+
+function renderPlanningPanel() {
+  elements.planningCard.hidden = !planningState.isPlanning;
+  if (!planningState.isPlanning) {
+    return;
+  }
+
+  const count = planningState.moveSequence.length;
+  elements.planningMoveCount.textContent = `${count} ${count === 1 ? "move" : "moves"}`;
+  elements.planningSequence.textContent = formatPlanningSequence()
+    || "Select the side-to-move's piece to begin.";
+  elements.undoPlanButton.disabled = count === 0;
+  elements.clearPlanButton.disabled = count === 0;
+  elements.copyPlanButton.disabled = count === 0;
 }
 
 function getSearchNotice() {
@@ -595,6 +989,18 @@ function getSearchNotice() {
 }
 
 function renderStatus() {
+  if (pendingPromotion) {
+    elements.statusHeading.textContent = "Choose a promotion";
+    elements.statusDescription.textContent =
+      "Select a queen, rook, bishop, or knight to complete your move.";
+    return;
+  }
+
+  if (planningState.isPlanning) {
+    renderPlanningStatus();
+    return;
+  }
+
   if (game.isCheckmate()) {
     const winner = game.turn() === "w" ? "Black" : "White";
     elements.statusHeading.textContent = `${winner} wins`;
@@ -605,13 +1011,6 @@ function renderStatus() {
   if (game.isDraw()) {
     elements.statusHeading.textContent = "Draw";
     elements.statusDescription.textContent = drawDescription();
-    return;
-  }
-
-  if (pendingPromotion) {
-    elements.statusHeading.textContent = "Choose a promotion";
-    elements.statusDescription.textContent =
-      "Select a queen, rook, bishop, or knight to complete your move.";
     return;
   }
 
@@ -666,6 +1065,45 @@ function renderStatus() {
     engineMoveAnnouncement && game.turn() === "w"
       ? `${engineMoveAnnouncement} ${turnDescription}`
       : turnDescription;
+}
+
+function renderPlanningStatus() {
+  const planningGame = planningState.hypotheticalBoard;
+  const activeSelectedSquare = getSelectedSquare();
+  const side = planningGame.turn() === "w" ? "White" : "Black";
+
+  if (planningGame.isCheckmate()) {
+    const winner = planningGame.turn() === "w" ? "Black" : "White";
+    elements.statusHeading.textContent = `${winner} wins in this line`;
+    elements.statusDescription.textContent =
+      "The planned sequence ends in checkmate. Undo a move to explore another line.";
+    return;
+  }
+
+  if (planningGame.isDraw()) {
+    elements.statusHeading.textContent = "Draw in this line";
+    elements.statusDescription.textContent =
+      "The planned sequence reaches a drawn position. Undo a move to continue exploring.";
+    return;
+  }
+
+  if (activeSelectedSquare) {
+    const piece = planningGame.get(activeSelectedSquare);
+    const destinations = [...new Set(getSelectedMoves().map((move) => move.to))];
+    elements.statusHeading.textContent = `${capitalize(PIECE_NAMES[piece.type])} selected`;
+    elements.statusDescription.textContent = destinations.length > 0
+      ? `${interactionMessage ? `${interactionMessage} ` : ""}Plan ${side}'s move to ${destinations.join(", ")}.`
+      : `This ${PIECE_NAMES[piece.type]} has no legal moves in the planned position.`;
+    return;
+  }
+
+  elements.statusHeading.textContent = "Planning mode active";
+  const turnDescription = planningGame.isCheck()
+    ? `${side} is in check in the planned position.`
+    : `${side} to move in the planned position.`;
+  elements.statusDescription.textContent = interactionMessage
+    ? `${interactionMessage} ${turnDescription}`
+    : `${turnDescription} Select a piece to see legal moves.`;
 }
 
 function drawDescription() {

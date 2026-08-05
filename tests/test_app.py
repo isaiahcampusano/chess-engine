@@ -32,6 +32,23 @@ class WebAppTests(unittest.TestCase):
             self.assertIn(b'aria-describedby="boardInstructions"', response.data)
             self.assertIn(b"Use the arrow keys", response.data)
 
+    def test_home_page_includes_move_planning_controls(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            for element_id in (
+                b"planningArrows",
+                b"planningCard",
+                b"planningSequence",
+                b"planMovesButton",
+                b"undoPlanButton",
+                b"clearPlanButton",
+                b"copyPlanButton",
+            ):
+                with self.subTest(element_id=element_id):
+                    self.assertIn(b'id="' + element_id + b'"', response.data)
+
+            self.assertIn(b'aria-pressed="false"', response.data)
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):

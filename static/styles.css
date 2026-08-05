@@ -226,6 +226,7 @@ h1 {
 }
 
 .chessboard {
+  position: relative;
   width: 100%;
   overflow: hidden;
   border-radius: 14px;
@@ -238,7 +239,40 @@ h1 {
 
 .square-55d63 img {
   position: relative;
+  z-index: 3;
+}
+
+.planning-arrows {
+  position: absolute;
+  inset: 0;
   z-index: 2;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.planning-arrow {
+  fill: none;
+  stroke: #ffd84d;
+  stroke-linecap: round;
+  stroke-width: 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.planning-arrow.is-candidate {
+  opacity: 0.7;
+  stroke-dasharray: 4 3;
+}
+
+.planning-arrow.is-committed {
+  opacity: 0.92;
+  stroke-width: 5;
+}
+
+.chessboard.is-planning .square-55d63.is-legal-move::after,
+.chessboard.is-planning .square-55d63.is-legal-capture::after {
+  display: none;
 }
 
 .square-55d63::after {
@@ -277,6 +311,16 @@ h1 {
 
 .square-55d63.is-selected {
   box-shadow: inset 0 0 0 clamp(3px, 0.5vw, 5px) #d6f36a;
+}
+
+.square-55d63.is-planning-selected::before {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: rgba(226, 63, 63, 0.38);
+  box-shadow: inset 0 0 0 clamp(3px, 0.5vw, 5px) rgba(255, 118, 104, 0.95);
+  content: "";
+  pointer-events: none;
 }
 
 .square-55d63.is-last-move {
@@ -321,6 +365,7 @@ h1 {
 
 .status-card,
 .history-card,
+.planning-card,
 .metrics {
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -330,12 +375,14 @@ h1 {
 }
 
 .status-card,
-.history-card {
+.history-card,
+.planning-card {
   padding: 22px;
 }
 
 .status-card h2,
-.history-card h2 {
+.history-card h2,
+.planning-card h2 {
   margin-bottom: 8px;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 1.55rem;
@@ -407,6 +454,32 @@ h1 {
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-color: #637166 transparent;
+}
+
+.planning-sequence {
+  min-height: 46px;
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.planning-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.planning-controls .button.secondary {
+  min-height: 42px;
+  margin-top: 0;
+  padding: 0 10px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
 }
 
 .empty-history {
@@ -678,7 +751,8 @@ footer {
   }
 
   .status-card,
-  .history-card {
+  .history-card,
+  .planning-card {
     padding: 18px;
   }
 
