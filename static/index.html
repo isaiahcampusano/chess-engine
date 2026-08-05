@@ -148,11 +148,121 @@
             Plan moves
           </button>
 
+          <button id="reviewGameButton" class="button primary full-width" type="button" hidden>
+            Review game
+          </button>
+
           <button id="newGameButton" class="button primary full-width" type="button">
             New game
           </button>
         </aside>
       </section>
+
+      <section id="analysisPanel" class="analysis-panel" aria-labelledby="analysisHeading" hidden>
+        <header class="analysis-header">
+          <div>
+            <p class="panel-label">Post-game review</p>
+            <h2 id="analysisHeading">Game analysis</h2>
+            <p id="analysisEngineName" class="analysis-engine-name"></p>
+          </div>
+          <button id="closeAnalysisButton" class="button secondary" type="button">
+            Close review
+          </button>
+        </header>
+
+        <div class="analysis-summary" aria-label="Accuracy summary">
+          <article>
+            <span>White accuracy</span>
+            <strong id="whiteAccuracy">&mdash;</strong>
+            <p id="whiteCounts">No classifications yet.</p>
+          </article>
+          <article>
+            <span>Black accuracy</span>
+            <strong id="blackAccuracy">&mdash;</strong>
+            <p id="blackCounts">No classifications yet.</p>
+          </article>
+          <article>
+            <span>Game result</span>
+            <strong id="analysisResult">&mdash;</strong>
+            <p>Accuracy is an open, simplified centipawn-loss estimate.</p>
+          </article>
+        </div>
+
+        <div class="analysis-graph-card">
+          <div class="analysis-section-heading">
+            <div>
+              <p class="panel-label">Evaluation</p>
+              <h3>Advantage by move</h3>
+            </div>
+            <strong id="selectedEvaluation">0.00</strong>
+          </div>
+          <svg
+            id="analysisGraph"
+            class="analysis-graph"
+            viewBox="0 0 800 220"
+            role="img"
+            aria-label="Position evaluation throughout the game"
+          ></svg>
+          <div class="analysis-graph-legend" aria-hidden="true">
+            <span>Black advantage</span>
+            <span>Equal</span>
+            <span>White advantage</span>
+          </div>
+        </div>
+
+        <div class="analysis-review-grid">
+          <section class="analysis-move-card" aria-labelledby="analysisMovesHeading">
+            <div class="analysis-section-heading">
+              <div>
+                <p class="panel-label">Move review</p>
+                <h3 id="analysisMovesHeading">Every move</h3>
+              </div>
+            </div>
+            <div id="analysisMoveList" class="analysis-move-list"></div>
+          </section>
+
+          <section class="analysis-detail-card" aria-labelledby="analysisMoveTitle">
+            <div class="analysis-detail-heading">
+              <span id="analysisBadge" class="analysis-badge">Start</span>
+              <div>
+                <p class="panel-label">Selected position</p>
+                <h3 id="analysisMoveTitle">Starting position</h3>
+              </div>
+            </div>
+            <p id="analysisMoveExplanation" class="analysis-explanation"></p>
+            <dl class="analysis-position-stats">
+              <div>
+                <dt>Evaluation</dt>
+                <dd id="analysisEvaluationDetail">0.00</dd>
+              </div>
+              <div>
+                <dt>Material</dt>
+                <dd id="analysisMaterialDetail">Equal</dd>
+              </div>
+              <div>
+                <dt>Centipawn loss</dt>
+                <dd id="analysisLossDetail">&mdash;</dd>
+              </div>
+            </dl>
+            <div class="analysis-best-line">
+              <span>Engine recommendation</span>
+              <strong id="analysisBestMove">&mdash;</strong>
+              <p id="analysisBestLine">No continuation is available.</p>
+            </div>
+            <div class="analysis-navigation">
+              <button id="previousAnalysisButton" class="button secondary" type="button">
+                Previous
+              </button>
+              <span id="analysisPositionCount">Position 0 of 0</span>
+              <button id="nextAnalysisButton" class="button secondary" type="button">
+                Next
+              </button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <div id="analysisError" class="alert analysis-error" role="alert" hidden></div>
 
       <footer>
         <span>Powered by python-chess</span>

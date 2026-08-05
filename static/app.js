@@ -3,8 +3,10 @@ import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/+esm";
 const PIECE_THEME =
   "https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/{piece}.png";
 const CLIENT_TIMEOUT_MS = 12_000;
+const ANALYSIS_TIMEOUT_MS = 28_000;
 const PROMOTION_TEST_FEN = "7k/P7/8/8/8/8/8/7K w - - 0 1";
 const PROMOTION_CAPTURE_TEST_FEN = "1r5k/P7/8/8/8/8/8/7K w - - 0 1";
+const ANALYSIS_TEST_FEN = "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1";
 const PROMOTION_PIECES = new Set(["q", "r", "b", "n"]);
 const BOARD_FILES = "abcdefgh";
 const PIECE_NAMES = {
@@ -78,11 +80,29 @@ const promotionTestFen = {
   promotion: PROMOTION_TEST_FEN,
   "promotion-capture": PROMOTION_CAPTURE_TEST_FEN,
 }[localTestName] || null;
+const analysisTestFen = localTestName === "analysis" ? ANALYSIS_TEST_FEN : null;
+const initialTestFen = promotionTestFen || analysisTestFen;
 
 const elements = {
+  analysisBadge: document.querySelector("#analysisBadge"),
+  analysisBestLine: document.querySelector("#analysisBestLine"),
+  analysisBestMove: document.querySelector("#analysisBestMove"),
+  analysisEngineName: document.querySelector("#analysisEngineName"),
+  analysisError: document.querySelector("#analysisError"),
+  analysisEvaluationDetail: document.querySelector("#analysisEvaluationDetail"),
+  analysisGraph: document.querySelector("#analysisGraph"),
+  analysisLossDetail: document.querySelector("#analysisLossDetail"),
+  analysisMaterialDetail: document.querySelector("#analysisMaterialDetail"),
+  analysisMoveExplanation: document.querySelector("#analysisMoveExplanation"),
+  analysisMoveList: document.querySelector("#analysisMoveList"),
+  analysisMoveTitle: document.querySelector("#analysisMoveTitle"),
+  analysisPanel: document.querySelector("#analysisPanel"),
+  analysisPositionCount: document.querySelector("#analysisPositionCount"),
+  analysisResult: document.querySelector("#analysisResult"),
   board: document.querySelector("#myBoard"),
   boardOverlay: document.querySelector("#boardOverlay"),
   clearPlanButton: document.querySelector("#clearPlanButton"),
+  closeAnalysisButton: document.querySelector("#closeAnalysisButton"),
   copyPlanButton: document.querySelector("#copyPlanButton"),
   cancelPromotionButton: document.querySelector("#cancelPromotionButton"),
   dependencyAlert: document.querySelector("#dependencyAlert"),
@@ -91,6 +111,7 @@ const elements = {
   moveCount: document.querySelector("#moveCount"),
   moveHistory: document.querySelector("#moveHistory"),
   newGameButton: document.querySelector("#newGameButton"),
+  nextAnalysisButton: document.querySelector("#nextAnalysisButton"),
   nodesValue: document.querySelector("#nodesValue"),
   promotionDialog: document.querySelector("#promotionDialog"),
   promotionOptions: document.querySelectorAll("[data-promotion]"),
@@ -99,25 +120,34 @@ const elements = {
   planningCard: document.querySelector("#planningCard"),
   planningMoveCount: document.querySelector("#planningMoveCount"),
   planningSequence: document.querySelector("#planningSequence"),
+  previousAnalysisButton: document.querySelector("#previousAnalysisButton"),
   retryButton: document.querySelector("#retryButton"),
+  reviewGameButton: document.querySelector("#reviewGameButton"),
   searchNotice: document.querySelector("#searchNotice"),
   statusDescription: document.querySelector("#statusDescription"),
   statusHeading: document.querySelector("#statusHeading"),
   thinkingPill: document.querySelector("#thinkingPill"),
   undoPlanButton: document.querySelector("#undoPlanButton"),
+  whiteAccuracy: document.querySelector("#whiteAccuracy"),
+  whiteCounts: document.querySelector("#whiteCounts"),
+  blackAccuracy: document.querySelector("#blackAccuracy"),
+  blackCounts: document.querySelector("#blackCounts"),
+  selectedEvaluation: document.querySelector("#selectedEvaluation"),
 };
 
 let game = createInitialGame();
+let gameStartFen = game.fen();
 let board;
 let isThinking = false;
 let lastError = "";
 let lastEngineStats = null;
 let activeRequestId = 0;
 let pendingController = null;
+let analysisController = null;
 let pendingPromotion = null;
 let selectedSquare = null;
 let selectedMoves = [];
-let focusedSquare = promotionTestFen ? "a7" : "e2";
+let focusedSquare = promotionTestFen ? "a7" : analysisTestFen ? "f7" : "e2";
 let lastMove = null;
 let interactionMessage = "";
 let engineMoveAnnouncement = "";
@@ -131,6 +161,14 @@ const planningState = {
   hypotheticalBoard: null,
   baseFen: null,
   predictor: null,
+};
+const analysisState = {
+  isLoading: false,
+  isOpen: false,
+  data: null,
+  selectedPly: 0,
+  reviewBoard: null,
+  error: "",
 };
 
 function initialize() {
@@ -156,6 +194,17 @@ function initialize() {
   elements.board.addEventListener("keydown", handleBoardKeydown);
   elements.board.addEventListener("focusin", handleBoardFocus);
   elements.newGameButton.addEventListener("click", startNewGame);
+  elements.reviewGameButton.addEventListener("click", requestGameAnalysis);
+  elements.closeAnalysisButton.addEventListener("click", closeGameAnalysis);
+  elements.previousAnalysisButton.addEventListener("click", () => {
+    selectAnalysisPly(analysisState.selectedPly - 1);
+  });
+  elements.nextAnalysisButton.addEventListener("click", () => {
+    selectAnalysisPly(analysisState.selectedPly + 1);
+  });
+  elements.analysisMoveList.addEventListener("click", handleAnalysisSelection);
+  elements.analysisGraph.addEventListener("click", handleAnalysisSelection);
+  elements.analysisGraph.addEventListener("keydown", handleAnalysisGraphKeydown);
   elements.planMovesButton.addEventListener("click", togglePlanningMode);
   elements.undoPlanButton.addEventListener("click", undoPlannedMove);
   elements.clearPlanButton.addEventListener("click", clearPlanningSequence);
@@ -182,6 +231,8 @@ function initialize() {
 function onDragStart(source, piece) {
   const activeGame = getActiveGame();
   if (
+    analysisState.isOpen ||
+    analysisState.isLoading ||
     isThinking ||
     pendingPromotion ||
     activeGame.isGameOver() ||
@@ -408,6 +459,8 @@ function activateSquare(square) {
   const activeSelectedSquare = getSelectedSquare();
   const activeSelectedMoves = getSelectedMoves();
   if (
+    analysisState.isOpen ||
+    analysisState.isLoading ||
     isThinking ||
     pendingPromotion ||
     activeGame.isGameOver() ||
@@ -497,15 +550,21 @@ function clearSelection(shouldRender = true) {
 }
 
 function getActiveGame() {
+  if (analysisState.isOpen) {
+    return analysisState.reviewBoard;
+  }
   return planningState.isPlanning ? planningState.hypotheticalBoard : game;
 }
 
 function getSelectedSquare() {
+  if (analysisState.isOpen) {
+    return null;
+  }
   return planningState.isPlanning ? planningState.selectedSquare : selectedSquare;
 }
 
 function getSelectedMoves() {
-  return selectedMoves;
+  return analysisState.isOpen ? [] : selectedMoves;
 }
 
 function offsetSquare(square, fileDelta, rankDelta) {
@@ -547,6 +606,7 @@ function renderBoardAccessibility() {
   const activeGame = getActiveGame();
   const activeSelectedSquare = getSelectedSquare();
   const activeSelectedMoves = getSelectedMoves();
+  const displayedLastMove = getDisplayedLastMove();
   const squares = elements.board.querySelectorAll(".square-55d63");
   squares.forEach((element) => {
     const square = squareNameFromElement(element);
@@ -575,7 +635,7 @@ function renderBoardAccessibility() {
     );
     element.classList.toggle(
       "is-last-move",
-      square === lastMove?.from || square === lastMove?.to,
+      square === displayedLastMove?.from || square === displayedLastMove?.to,
     );
 
     element.setAttribute("role", "gridcell");
@@ -586,6 +646,8 @@ function renderBoardAccessibility() {
       "aria-disabled",
       String(
         isThinking ||
+        analysisState.isOpen ||
+        analysisState.isLoading ||
         activeGame.isGameOver() ||
         (!planningState.isPlanning && activeGame.turn() !== "w"),
       ),
@@ -670,6 +732,7 @@ function arrowGeometry(from, to) {
 function describeSquare(square, matchingMoves) {
   const piece = getActiveGame().get(square);
   const activeSelectedSquare = getSelectedSquare();
+  const displayedLastMove = getDisplayedLastMove();
   const descriptions = [
     square,
     piece ? `${piece.color === "w" ? "White" : "Black"} ${PIECE_NAMES[piece.type]}` : "empty",
@@ -685,14 +748,21 @@ function describeSquare(square, matchingMoves) {
         : "legal move destination",
     );
   }
-  if (square === lastMove?.from) {
+  if (square === displayedLastMove?.from) {
     descriptions.push("last move started here");
   }
-  if (square === lastMove?.to) {
+  if (square === displayedLastMove?.to) {
     descriptions.push("last move ended here");
   }
 
   return descriptions.join(", ");
+}
+
+function getDisplayedLastMove() {
+  if (analysisState.isOpen && analysisState.selectedPly > 0) {
+    return analysisState.data.moves[analysisState.selectedPly - 1];
+  }
+  return lastMove;
 }
 
 function syncBoard(useAnimation = true) {
@@ -701,7 +771,14 @@ function syncBoard(useAnimation = true) {
 }
 
 async function requestEngineMove() {
-  if (planningState.isPlanning || isThinking || game.isGameOver() || game.turn() !== "b") {
+  if (
+    analysisState.isOpen ||
+    analysisState.isLoading ||
+    planningState.isPlanning ||
+    isThinking ||
+    game.isGameOver() ||
+    game.turn() !== "b"
+  ) {
     return;
   }
 
@@ -793,7 +870,13 @@ function togglePlanningMode() {
     return;
   }
 
-  if (isThinking || pendingPromotion || game.isGameOver()) {
+  if (
+    analysisState.isOpen ||
+    analysisState.isLoading ||
+    isThinking ||
+    pendingPromotion ||
+    game.isGameOver()
+  ) {
     return;
   }
 
@@ -904,10 +987,128 @@ function formatPlanningSequence() {
   return groups.join(" ");
 }
 
+async function requestGameAnalysis() {
+  const history = game.history({ verbose: true });
+  if (analysisState.isLoading || history.length === 0 || !game.isGameOver()) {
+    return;
+  }
+
+  if (
+    analysisState.data?.start_fen === gameStartFen &&
+    analysisState.data?.final_fen === game.fen()
+  ) {
+    analysisState.isOpen = true;
+    analysisState.selectedPly = analysisState.data.moves.length;
+    analysisState.reviewBoard = new Chess(analysisState.data.final_fen);
+    syncBoard(false);
+    render();
+    elements.analysisPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), ANALYSIS_TIMEOUT_MS);
+  analysisController = controller;
+  analysisState.isLoading = true;
+  analysisState.error = "";
+  clearSelection(false);
+  render();
+
+  try {
+    const response = await fetch("/analysis", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        start_fen: gameStartFen,
+        moves: history.map(toUciMove),
+      }),
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "The game analysis request failed.");
+    }
+    if (!Array.isArray(data.moves) || !Array.isArray(data.evaluations)) {
+      throw new Error("The analysis response was incomplete.");
+    }
+    if (analysisController !== controller) {
+      return;
+    }
+
+    analysisState.data = data;
+    analysisState.isOpen = true;
+    analysisState.selectedPly = data.moves.length;
+    analysisState.reviewBoard = new Chess(data.final_fen);
+    syncBoard(false);
+    render();
+    elements.analysisPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    if (analysisController !== controller) {
+      return;
+    }
+    analysisState.error = error.name === "AbortError"
+      ? "Game analysis timed out. Try again in a moment."
+      : error.message || "The game could not be analyzed.";
+  } finally {
+    window.clearTimeout(timer);
+    if (analysisController === controller) {
+      analysisController = null;
+      analysisState.isLoading = false;
+      render();
+    }
+  }
+}
+
+function toUciMove(move) {
+  return `${move.from}${move.to}${move.promotion || ""}`;
+}
+
+function closeGameAnalysis() {
+  if (!analysisState.isOpen) {
+    return;
+  }
+  analysisState.isOpen = false;
+  analysisState.reviewBoard = null;
+  analysisState.selectedPly = 0;
+  syncBoard(false);
+  render();
+}
+
+function selectAnalysisPly(ply) {
+  if (!analysisState.isOpen) {
+    return;
+  }
+  const maximum = analysisState.data.moves.length;
+  const selectedPly = Math.min(maximum, Math.max(0, Number(ply)));
+  const fen = selectedPly === 0
+    ? analysisState.data.start_fen
+    : analysisState.data.moves[selectedPly - 1].fen_after;
+  analysisState.selectedPly = selectedPly;
+  analysisState.reviewBoard = new Chess(fen);
+  syncBoard(false);
+  render();
+}
+
+function handleAnalysisSelection(event) {
+  const target = event.target.closest("[data-analysis-ply]");
+  if (target) {
+    selectAnalysisPly(target.dataset.analysisPly);
+  }
+}
+
+function handleAnalysisGraphKeydown(event) {
+  if ((event.key === "Enter" || event.key === " ") && event.target.dataset.analysisPly) {
+    event.preventDefault();
+    selectAnalysisPly(event.target.dataset.analysisPly);
+  }
+}
+
 function startNewGame() {
   activeRequestId += 1;
   pendingController?.abort();
   pendingController = null;
+  analysisController?.abort();
+  analysisController = null;
   pendingPromotion = null;
   if (elements.promotionDialog.open) {
     elements.promotionDialog.close();
@@ -920,6 +1121,12 @@ function startNewGame() {
   selectedSquare = null;
   selectedMoves = [];
   interactionMessage = "";
+  analysisState.isLoading = false;
+  analysisState.isOpen = false;
+  analysisState.data = null;
+  analysisState.selectedPly = 0;
+  analysisState.reviewBoard = null;
+  analysisState.error = "";
   planningState.isPlanning = false;
   planningState.selectedSquare = null;
   planningState.highlightedSquares.clear();
@@ -929,7 +1136,8 @@ function startNewGame() {
   planningState.baseFen = null;
   planningState.predictor = null;
   game = createInitialGame();
-  focusedSquare = promotionTestFen ? "a7" : "e2";
+  gameStartFen = game.fen();
+  focusedSquare = promotionTestFen ? "a7" : analysisTestFen ? "f7" : "e2";
   syncBoard(false);
   render();
 }
@@ -939,6 +1147,7 @@ function render() {
   renderHistory();
   renderStats();
   renderPlanningPanel();
+  renderAnalysisPanel();
 
   const canRetry =
     !planningState.isPlanning &&
@@ -951,13 +1160,26 @@ function render() {
   const searchMessage = getSearchNotice();
   elements.searchNotice.hidden = planningState.isPlanning || !searchMessage;
   elements.searchNotice.textContent = searchMessage;
-  elements.boardOverlay.hidden = !isThinking;
+  elements.boardOverlay.hidden = !(isThinking || analysisState.isLoading);
   elements.thinkingPill.hidden = !isThinking;
-  elements.planMovesButton.disabled = isThinking || Boolean(pendingPromotion) || game.isGameOver();
+  elements.planMovesButton.disabled =
+    analysisState.isOpen ||
+    analysisState.isLoading ||
+    isThinking ||
+    Boolean(pendingPromotion) ||
+    game.isGameOver();
   elements.planMovesButton.setAttribute("aria-pressed", String(planningState.isPlanning));
   elements.planMovesButton.textContent = planningState.isPlanning
     ? "Exit planning"
     : "Plan moves";
+  const canReview = game.isGameOver() && game.history().length > 0 && !analysisState.isOpen;
+  elements.reviewGameButton.hidden = !canReview;
+  elements.reviewGameButton.disabled = analysisState.isLoading;
+  elements.reviewGameButton.textContent = analysisState.isLoading
+    ? "Analyzing game\u2026"
+    : "Review game";
+  elements.analysisError.hidden = !analysisState.error;
+  elements.analysisError.textContent = analysisState.error;
   scheduleBoardAccessibilityRender();
 }
 
@@ -974,6 +1196,203 @@ function renderPlanningPanel() {
   elements.undoPlanButton.disabled = count === 0;
   elements.clearPlanButton.disabled = count === 0;
   elements.copyPlanButton.disabled = count === 0;
+}
+
+function renderAnalysisPanel() {
+  elements.analysisPanel.hidden = !analysisState.isOpen;
+  if (!analysisState.isOpen) {
+    return;
+  }
+
+  const { data } = analysisState;
+  elements.analysisEngineName.textContent =
+    `Analyzed with ${data.engine} \u2022 ${data.moves.length} half-moves`;
+  elements.whiteAccuracy.textContent = `${data.summary.white_accuracy.toFixed(1)}%`;
+  elements.blackAccuracy.textContent = `${data.summary.black_accuracy.toFixed(1)}%`;
+  elements.whiteCounts.textContent = formatClassificationCounts(data.summary.counts.white);
+  elements.blackCounts.textContent = formatClassificationCounts(data.summary.counts.black);
+  elements.analysisResult.textContent = formatAnalysisResult(data.result);
+  renderAnalysisGraph();
+  renderAnalysisMoveList();
+  renderAnalysisDetails();
+}
+
+function renderAnalysisGraph() {
+  const namespace = "http://www.w3.org/2000/svg";
+  const width = 800;
+  const height = 220;
+  const left = 24;
+  const right = 776;
+  const top = 14;
+  const bottom = 206;
+  const zeroY = (top + bottom) / 2;
+  const range = 800;
+  const evaluations = analysisState.data.evaluations;
+  const maximumPly = Math.max(1, evaluations.length - 1);
+  const xFor = (ply) => left + (Number(ply) / maximumPly) * (right - left);
+  const yFor = (centipawns) => {
+    const clamped = Math.max(-range, Math.min(range, Number(centipawns)));
+    return zeroY - (clamped / range) * (zeroY - top);
+  };
+
+  const whiteZone = createSvgElement(namespace, "rect", {
+    x: 0,
+    y: 0,
+    width,
+    height: zeroY,
+    class: "graph-white-zone",
+  });
+  const blackZone = createSvgElement(namespace, "rect", {
+    x: 0,
+    y: zeroY,
+    width,
+    height: height - zeroY,
+    class: "graph-black-zone",
+  });
+  const gridLines = [top, zeroY / 2 + top / 2, zeroY, zeroY + (bottom - zeroY) / 2, bottom]
+    .map((y) => createSvgElement(namespace, "line", {
+      x1: left,
+      y1: y,
+      x2: right,
+      y2: y,
+      class: y === zeroY ? "graph-zero-line" : "graph-grid-line",
+    }));
+  const points = evaluations.map((evaluation) =>
+    `${xFor(evaluation.ply)},${yFor(evaluation.evaluation_cp)}`,
+  );
+  const line = createSvgElement(namespace, "polyline", {
+    points: points.join(" "),
+    class: "graph-evaluation-line",
+  });
+  const pointNodes = evaluations.map((evaluation) => {
+    const circle = createSvgElement(namespace, "circle", {
+      cx: xFor(evaluation.ply),
+      cy: yFor(evaluation.evaluation_cp),
+      r: evaluation.ply === analysisState.selectedPly ? 6 : 4,
+      class: `graph-point${evaluation.ply === analysisState.selectedPly ? " is-selected" : ""}`,
+      tabindex: 0,
+      role: "button",
+      "aria-label": `Position ${evaluation.ply}: ${formatEvaluation(evaluation.evaluation_cp)}`,
+    });
+    circle.dataset.analysisPly = String(evaluation.ply);
+    return circle;
+  });
+
+  elements.analysisGraph.replaceChildren(
+    whiteZone,
+    blackZone,
+    ...gridLines,
+    line,
+    ...pointNodes,
+  );
+}
+
+function renderAnalysisMoveList() {
+  const fragment = document.createDocumentFragment();
+  analysisState.data.moves.forEach((move) => {
+    const button = createElement(
+      "button",
+      `analysis-move${move.ply === analysisState.selectedPly ? " is-selected" : ""}`,
+    );
+    button.type = "button";
+    button.dataset.analysisPly = String(move.ply);
+    button.setAttribute("aria-pressed", String(move.ply === analysisState.selectedPly));
+    const number = move.color === "white" ? `${move.move_number}.` : `${move.move_number}\u2026`;
+    const badge = createElement(
+      "span",
+      `analysis-badge ${move.classification}`,
+      capitalize(move.classification),
+    );
+    button.append(
+      createElement("span", "analysis-move-number", number),
+      createElement("span", "analysis-move-san", move.san),
+      badge,
+      createElement("span", "analysis-move-eval", formatEvaluation(move.evaluation_cp)),
+    );
+    fragment.append(button);
+  });
+  elements.analysisMoveList.replaceChildren(fragment);
+  elements.analysisMoveList.querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function renderAnalysisDetails() {
+  const ply = analysisState.selectedPly;
+  const point = analysisState.data.evaluations[ply];
+  const move = ply > 0 ? analysisState.data.moves[ply - 1] : null;
+  const recommendation = move || analysisState.data.moves[0];
+  const classification = move?.classification || "";
+
+  elements.analysisBadge.className = `analysis-badge ${classification}`.trim();
+  elements.analysisBadge.textContent = move ? capitalize(classification) : "Start";
+  elements.analysisMoveTitle.textContent = move
+    ? `${move.move_number}${move.color === "white" ? "." : "\u2026"} ${move.san}`
+    : "Starting position";
+  elements.analysisMoveExplanation.textContent = move
+    ? describeMoveReview(move)
+    : "Select a move or graph point to inspect how the evaluation changed.";
+  const evaluation = formatEvaluation(point.evaluation_cp);
+  elements.selectedEvaluation.textContent = evaluation;
+  elements.analysisEvaluationDetail.textContent = evaluation;
+  elements.analysisMaterialDetail.textContent = formatMaterial(point.material_difference);
+  elements.analysisLossDetail.textContent = move ? `${move.centipawn_loss} cp` : "\u2014";
+  elements.analysisBestMove.textContent = recommendation?.best_move_san || "No move";
+  elements.analysisBestLine.textContent = recommendation?.best_line_san?.length
+    ? recommendation.best_line_san.join(" ")
+    : "No continuation is available for this position.";
+  elements.analysisPositionCount.textContent =
+    `Position ${ply} of ${analysisState.data.moves.length}`;
+  elements.previousAnalysisButton.disabled = ply === 0;
+  elements.nextAnalysisButton.disabled = ply === analysisState.data.moves.length;
+}
+
+function describeMoveReview(move) {
+  const label = capitalize(move.classification);
+  if (move.classification === "best") {
+    return `${label}: ${move.san} matched the engine's first choice.`;
+  }
+  const severity = {
+    excellent: "kept nearly all of the position's value",
+    good: "was sound, though a slightly stronger continuation existed",
+    inaccuracy: "gave away a small part of the advantage",
+    mistake: "changed the position substantially",
+    blunder: "caused a major evaluation swing",
+  }[move.classification];
+  const alternative = move.best_move_san ? ` The engine preferred ${move.best_move_san}.` : "";
+  return `${label}: ${move.san} ${severity}.${alternative}`;
+}
+
+function formatClassificationCounts(counts) {
+  const strongMoves = counts.best + counts.excellent + counts.good;
+  return `${strongMoves} strong \u2022 ${counts.inaccuracy} inaccuracies \u2022 `
+    + `${counts.mistake} mistakes \u2022 ${counts.blunder} blunders`;
+}
+
+function formatAnalysisResult(result) {
+  return { "1-0": "White won", "0-1": "Black won", "1/2-1/2": "Draw" }[result]
+    || "Unfinished";
+}
+
+function formatEvaluation(centipawns) {
+  const value = Number(centipawns);
+  if (Math.abs(value) >= 10_000) {
+    return value > 0 ? "+M" : "-M";
+  }
+  const pawns = value / 100;
+  return `${pawns >= 0 ? "+" : ""}${pawns.toFixed(2)}`;
+}
+
+function formatMaterial(difference) {
+  const value = Number(difference);
+  if (value === 0) return "Equal";
+  return value > 0 ? `White +${value}` : `Black +${Math.abs(value)}`;
+}
+
+function createSvgElement(namespace, tag, attributes) {
+  const element = document.createElementNS(namespace, tag);
+  Object.entries(attributes).forEach(([name, value]) => {
+    element.setAttribute(name, String(value));
+  });
+  return element;
 }
 
 function getSearchNotice() {
@@ -998,6 +1417,24 @@ function renderStatus() {
 
   if (planningState.isPlanning) {
     renderPlanningStatus();
+    return;
+  }
+
+  if (analysisState.isLoading) {
+    elements.statusHeading.textContent = "Analyzing game";
+    elements.statusDescription.textContent =
+      "Reviewing every move and calculating evaluations, classifications, and best lines\u2026";
+    return;
+  }
+
+  if (analysisState.isOpen) {
+    const move = analysisState.selectedPly > 0
+      ? analysisState.data.moves[analysisState.selectedPly - 1]
+      : null;
+    elements.statusHeading.textContent = "Game review";
+    elements.statusDescription.textContent = move
+      ? `Reviewing ${move.san}, classified as ${move.classification}.`
+      : "Reviewing the starting position.";
     return;
   }
 
@@ -1053,6 +1490,13 @@ function renderStatus() {
       localTestName === "promotion-capture"
         ? "Capture the rook from a7 to b8, then choose the pawn's new piece."
         : "Drag the pawn from a7 to a8, then choose its new piece.";
+    return;
+  }
+
+  if (analysisTestFen && game.history().length === 0) {
+    elements.statusHeading.textContent = "Analysis test";
+    elements.statusDescription.textContent =
+      "Move the queen from f7 to g7 to checkmate, then review the game.";
     return;
   }
 
@@ -1159,7 +1603,7 @@ function showDependencyError() {
 }
 
 function createInitialGame() {
-  return promotionTestFen ? new Chess(promotionTestFen) : new Chess();
+  return initialTestFen ? new Chess(initialTestFen) : new Chess();
 }
 
 function capitalize(value) {

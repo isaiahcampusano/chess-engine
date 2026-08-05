@@ -5,6 +5,7 @@ from __future__ import annotations
 import chess
 from flask import Flask, jsonify, request
 
+from analysis import MAX_GAME_PLIES, analyse_game
 from engine import choose_best_move
 
 
@@ -75,6 +76,34 @@ def handle_move():
             "game_over": False,
         }
     )
+
+
+@app.post("/analysis")
+def handle_analysis():
+    """Analyze a legal game move-by-move for the post-game review UI."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _error("Request body must be a JSON object.", 400)
+
+    moves = payload.get("moves")
+    if not isinstance(moves, list):
+        return _error("'moves' must be an array of UCI move strings.", 400)
+    if len(moves) > MAX_GAME_PLIES:
+        return _error(f"Analysis is limited to {MAX_GAME_PLIES} half-moves.", 400)
+
+    start_fen = payload.get("start_fen", chess.STARTING_FEN)
+    if not isinstance(start_fen, str) or not start_fen.strip():
+        return _error("'start_fen' must be a non-empty FEN string.", 400)
+
+    try:
+        result = analyse_game(moves, start_fen=start_fen.strip())
+    except ValueError as error:
+        return _error(str(error), 400)
+    except Exception:
+        app.logger.exception("Post-game analysis failed")
+        return _error("The game could not be analyzed.", 500)
+
+    return jsonify(result)
 
 
 def _error(message: str, status_code: int):
