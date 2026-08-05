@@ -3,7 +3,12 @@ services:
     name: isaiahcampusano-chess-engine
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && bash scripts/install_stockfish.sh
     startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 30 app:app
-    healthCheckPath: /
+    healthCheckPath: /health
+    envVars:
+      - key: STOCKFISH_PATH
+        value: .stockfish/stockfish
+      - key: REQUIRE_STOCKFISH
+        value: "true"
     autoDeployTrigger: commit

@@ -12,7 +12,7 @@ from typing import Protocol, Sequence
 import chess
 import chess.engine
 
-from engine import choose_best_move, evaluate_board
+from engine import choose_best_move
 
 
 MATE_SCORE = 10_000
@@ -40,6 +40,8 @@ CLASSIFICATIONS = (
     "blunder",
 )
 
+TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
 
 @dataclass(frozen=True)
 class PositionAnalysis:
@@ -50,6 +52,10 @@ class PositionAnalysis:
     principal_variation: tuple[chess.Move, ...] = ()
     depth: int = 0
     mate: int | None = None
+
+
+class StockfishUnavailableError(RuntimeError):
+    """Raised when production requires Stockfish but it cannot be used."""
 
 
 class PositionEvaluator(Protocol):
@@ -73,15 +79,12 @@ class InternalEvaluator:
         self.time_limit_seconds = time_limit_seconds
 
     def analyse(self, board: chess.Board) -> PositionAnalysis:
-        if board.is_game_over(claim_draw=True):
-            return PositionAnalysis(
-                evaluation_cp=max(-MATE_SCORE, min(MATE_SCORE, evaluate_board(board))),
-                best_move=None,
-                mate=0 if board.is_checkmate() else None,
-            )
+        terminal_analysis = _terminal_position_analysis(board)
+        if terminal_analysis is not None:
+            return terminal_analysis
 
         result = choose_best_move(
-            board.copy(stack=False),
+            board.copy(stack=True),
             depth=self.depth,
             time_limit_seconds=self.time_limit_seconds,
         )
@@ -99,7 +102,7 @@ class InternalEvaluator:
         board: chess.Board,
         first_move: chess.Move | None,
     ) -> tuple[chess.Move, ...]:
-        variation_board = board.copy(stack=False)
+        variation_board = board.copy(stack=True)
         variation: list[chess.Move] = []
         next_move = first_move
 
@@ -112,7 +115,7 @@ class InternalEvaluator:
                 break
 
             result = choose_best_move(
-                variation_board.copy(stack=False),
+                variation_board.copy(stack=True),
                 depth=1,
                 time_limit_seconds=min(0.015, self.time_limit_seconds),
             )
@@ -147,12 +150,9 @@ class StockfishEvaluator:
     def analyse(self, board: chess.Board) -> PositionAnalysis:
         if self.engine is None:
             raise RuntimeError("Stockfish evaluator has not been started.")
-        if board.is_game_over(claim_draw=True):
-            return PositionAnalysis(
-                evaluation_cp=max(-MATE_SCORE, min(MATE_SCORE, evaluate_board(board))),
-                best_move=None,
-                mate=0 if board.is_checkmate() else None,
-            )
+        terminal_analysis = _terminal_position_analysis(board)
+        if terminal_analysis is not None:
+            return terminal_analysis
 
         info = self.engine.analyse(
             board,
@@ -186,6 +186,7 @@ def analyse_game(
     if evaluator is not None:
         return _analyse_with_evaluator(board, moves, evaluator)
 
+    require_stockfish = stockfish_required()
     stockfish_path = find_stockfish()
     if stockfish_path:
         try:
@@ -197,8 +198,16 @@ def analyse_game(
                 ),
             ) as stockfish:
                 return _analyse_with_evaluator(board, moves, stockfish)
-        except (OSError, RuntimeError, chess.engine.EngineError):
-            pass
+        except (OSError, RuntimeError, chess.engine.EngineError) as error:
+            if require_stockfish:
+                raise StockfishUnavailableError(
+                    "Stockfish is required but could not be started."
+                ) from error
+
+    if require_stockfish:
+        raise StockfishUnavailableError(
+            "Stockfish is required but no executable was found."
+        )
 
     return _analyse_with_evaluator(board, moves, InternalEvaluator())
 
@@ -209,7 +218,7 @@ def _analyse_with_evaluator(
     evaluator: PositionEvaluator,
 ) -> dict[str, object]:
     initial_fen = board.fen()
-    current_analysis = evaluator.analyse(board.copy(stack=False))
+    current_analysis = evaluator.analyse(board.copy(stack=True))
     evaluations = [_evaluation_point(0, current_analysis, material_difference(board))]
     move_reviews: list[dict[str, object]] = []
     losses: dict[chess.Color, list[int]] = {chess.WHITE: [], chess.BLACK: []}
@@ -229,7 +238,7 @@ def _analyse_with_evaluator(
         is_best = move == current_analysis.best_move
 
         board.push(move)
-        next_analysis = evaluator.analyse(board.copy(stack=False))
+        next_analysis = evaluator.analyse(board.copy(stack=True))
         loss = centipawn_loss(
             current_analysis.evaluation_cp,
             next_analysis.evaluation_cp,
@@ -352,6 +361,25 @@ def find_stockfish() -> str | None:
         if resolved:
             return resolved
     return shutil.which("stockfish") or shutil.which("stockfish.exe")
+
+
+def stockfish_required() -> bool:
+    return os.getenv("REQUIRE_STOCKFISH", "").strip().lower() in TRUE_ENV_VALUES
+
+
+def _terminal_position_analysis(board: chess.Board) -> PositionAnalysis | None:
+    outcome = board.outcome(claim_draw=True)
+    if outcome is None:
+        return None
+    if outcome.winner is None:
+        return PositionAnalysis(evaluation_cp=0, best_move=None)
+
+    evaluation_cp = MATE_SCORE if outcome.winner == chess.WHITE else -MATE_SCORE
+    return PositionAnalysis(
+        evaluation_cp=evaluation_cp,
+        best_move=None,
+        mate=0 if board.is_checkmate() else None,
+    )
 
 
 def _validated_board(fen: str) -> chess.Board:

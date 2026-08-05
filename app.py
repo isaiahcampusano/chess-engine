@@ -5,7 +5,7 @@ from __future__ import annotations
 import chess
 from flask import Flask, jsonify, request
 
-from analysis import MAX_GAME_PLIES, analyse_game
+from analysis import MAX_GAME_PLIES, analyse_game, find_stockfish, stockfish_required
 from engine import choose_best_move
 
 
@@ -19,6 +19,19 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 def index():
     """Serve the chess interface."""
     return app.send_static_file("index.html")
+
+
+@app.get("/health")
+def health():
+    """Report whether the configured post-game analysis engine is ready."""
+    if find_stockfish():
+        return jsonify({"status": "ok", "analysis_engine": "Stockfish"})
+    if stockfish_required():
+        return (
+            jsonify({"status": "error", "analysis_engine": "unavailable"}),
+            503,
+        )
+    return jsonify({"status": "ok", "analysis_engine": "Built-in minimax"})
 
 
 @app.post("/move")

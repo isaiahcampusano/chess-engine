@@ -17,6 +17,45 @@ class WebAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Python Chess Engine", response.data)
 
+    def test_health_reports_stockfish_ready(self) -> None:
+        with (
+            patch("app.stockfish_required", return_value=True),
+            patch("app.find_stockfish", return_value=".stockfish/stockfish"),
+        ):
+            response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "ok", "analysis_engine": "Stockfish"},
+        )
+
+    def test_health_fails_when_required_stockfish_is_missing(self) -> None:
+        with (
+            patch("app.stockfish_required", return_value=True),
+            patch("app.find_stockfish", return_value=None),
+        ):
+            response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "error", "analysis_engine": "unavailable"},
+        )
+
+    def test_health_allows_the_local_fallback(self) -> None:
+        with (
+            patch("app.stockfish_required", return_value=False),
+            patch("app.find_stockfish", return_value=None),
+        ):
+            response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "ok", "analysis_engine": "Built-in minimax"},
+        )
+
     def test_home_page_includes_all_promotion_choices(self) -> None:
         with self.client.get("/") as response:
             self.assertEqual(response.status_code, 200)
