@@ -192,6 +192,63 @@ h1 {
   color: #192111;
 }
 
+.board-stage {
+  display: grid;
+  grid-template-columns: clamp(34px, 5vw, 44px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.eval-bar {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #101713;
+  box-shadow: var(--shadow);
+}
+
+.eval-fill {
+  width: 100%;
+  transition: height 260ms ease;
+}
+
+.eval-black {
+  background: #202822;
+}
+
+.eval-white {
+  background: #f1f3e8;
+}
+
+.eval-score {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  z-index: 1;
+  min-width: calc(100% - 8px);
+  padding: 4px 2px;
+  border-radius: 7px;
+  background: rgba(16, 23, 19, 0.78);
+  color: #ffffff;
+  font-size: clamp(0.61rem, 1.5vw, 0.72rem);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  transform: translateX(-50%);
+  transition: top 180ms ease, bottom 180ms ease;
+}
+
+.eval-bar.is-black-ahead .eval-score {
+  top: 8px;
+  bottom: auto;
+  background: rgba(241, 243, 232, 0.86);
+  color: #151b17;
+}
+
 .thinking-pill {
   margin: 0 0 0 auto !important;
   padding: 7px 11px;
@@ -1099,6 +1156,15 @@ footer {
   .board-frame {
     padding: 6px;
     border-radius: 16px;
+  }
+
+  .board-stage {
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .eval-bar {
+    border-radius: 9px;
   }
 
   .chessboard {

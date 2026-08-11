@@ -4,6 +4,8 @@ const PIECE_THEME =
   "https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/{piece}.png";
 const CLIENT_TIMEOUT_MS = 12_000;
 const ANALYSIS_TIMEOUT_MS = 28_000;
+const EVALUATION_TIMEOUT_MS = 4_000;
+const EVALUATION_RANGE_CP = 500;
 const PROMOTION_TEST_FEN = "7k/P7/8/8/8/8/8/7K w - - 0 1";
 const PROMOTION_CAPTURE_TEST_FEN = "1r5k/P7/8/8/8/8/8/7K w - - 0 1";
 const ANALYSIS_TEST_FEN = "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1";
@@ -108,6 +110,10 @@ const elements = {
   dependencyAlert: document.querySelector("#dependencyAlert"),
   errorBox: document.querySelector("#errorBox"),
   evaluationValue: document.querySelector("#evaluationValue"),
+  evalBar: document.querySelector("#evalBar"),
+  evalBarScore: document.querySelector("#evalBarScore"),
+  evalBlackFill: document.querySelector("#evalBlackFill"),
+  evalWhiteFill: document.querySelector("#evalWhiteFill"),
   moveCount: document.querySelector("#moveCount"),
   moveHistory: document.querySelector("#moveHistory"),
   newGameButton: document.querySelector("#newGameButton"),
@@ -143,6 +149,8 @@ let lastError = "";
 let lastEngineStats = null;
 let activeRequestId = 0;
 let pendingController = null;
+let evaluationController = null;
+let evaluationRequestId = 0;
 let analysisController = null;
 let pendingPromotion = null;
 let selectedSquare = null;
@@ -226,6 +234,7 @@ function initialize() {
   elements.dependencyAlert.hidden = true;
   elements.dependencyAlert.classList.remove("is-error");
   render();
+  requestLiveEvaluation();
 }
 
 function onDragStart(source, piece) {
@@ -297,6 +306,7 @@ function playPlayerMove(moveOptions) {
   engineMoveAnnouncement = "";
   syncBoard();
   render();
+  requestLiveEvaluation();
 
   if (!game.isGameOver() && game.turn() === "b") {
     requestEngineMove();
@@ -833,6 +843,7 @@ async function requestEngineMove() {
       depth: Number(data.depth),
       timedOut: Boolean(data.timed_out),
     };
+    requestLiveEvaluation();
   } catch (error) {
     if (requestId !== activeRequestId) {
       return;
@@ -1107,6 +1118,9 @@ function startNewGame() {
   activeRequestId += 1;
   pendingController?.abort();
   pendingController = null;
+  evaluationRequestId += 1;
+  evaluationController?.abort();
+  evaluationController = null;
   analysisController?.abort();
   analysisController = null;
   pendingPromotion = null;
@@ -1140,6 +1154,83 @@ function startNewGame() {
   focusedSquare = promotionTestFen ? "a7" : analysisTestFen ? "f7" : "e2";
   syncBoard(false);
   render();
+  requestLiveEvaluation();
+}
+
+async function requestLiveEvaluation() {
+  const requestId = ++evaluationRequestId;
+  evaluationController?.abort();
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), EVALUATION_TIMEOUT_MS);
+  evaluationController = controller;
+
+  try {
+    const response = await fetch("/api/eval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fen: game.fen() }),
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "Evaluation unavailable.");
+    }
+    if (requestId === evaluationRequestId) {
+      updateEvalBar(data);
+    }
+  } catch (error) {
+    if (requestId === evaluationRequestId && error.name !== "AbortError") {
+      elements.evalBar.setAttribute("aria-label", "Position evaluation unavailable");
+    }
+  } finally {
+    window.clearTimeout(timer);
+    if (requestId === evaluationRequestId) {
+      evaluationController = null;
+    }
+  }
+}
+
+function updateEvalBar(data) {
+  const hasMate = data.mate !== null && data.mate !== undefined;
+  let whitePercent;
+  let label;
+  let description;
+  let whiteAhead = false;
+  let blackAhead = false;
+
+  if (hasMate) {
+    const mate = Number(data.mate);
+    const winner = data.winner || (mate > 0 ? "white" : "black");
+    const moves = Math.ceil(Math.abs(mate) / 2);
+    whiteAhead = winner === "white";
+    blackAhead = winner === "black";
+    whitePercent = whiteAhead ? 100 : 0;
+    label = `M${moves}`;
+    description = moves === 0
+      ? `${whiteAhead ? "White" : "Black"} has won by checkmate`
+      : `${whiteAhead ? "White" : "Black"} has mate in ${moves}`;
+    elements.evalBar.setAttribute("aria-valuenow", whiteAhead ? "5" : "-5");
+  } else {
+    const evaluation = Number(data.eval);
+    const safeEvaluation = Number.isFinite(evaluation) ? evaluation : 0;
+    const clamped = Math.max(-EVALUATION_RANGE_CP, Math.min(EVALUATION_RANGE_CP, safeEvaluation));
+    whitePercent = ((clamped + EVALUATION_RANGE_CP) / (2 * EVALUATION_RANGE_CP)) * 100;
+    whiteAhead = safeEvaluation > 0;
+    blackAhead = safeEvaluation < 0;
+    label = `${safeEvaluation > 0 ? "+" : ""}${(safeEvaluation / 100).toFixed(2)}`;
+    description = safeEvaluation === 0
+      ? "Position evaluation: even"
+      : `Position evaluation: ${label}, ${whiteAhead ? "White" : "Black"} ahead`;
+    elements.evalBar.setAttribute("aria-valuenow", String(clamped / 100));
+  }
+
+  elements.evalBlackFill.style.height = `${100 - whitePercent}%`;
+  elements.evalWhiteFill.style.height = `${whitePercent}%`;
+  elements.evalBarScore.textContent = label;
+  elements.evalBar.classList.toggle("is-white-ahead", whiteAhead);
+  elements.evalBar.classList.toggle("is-black-ahead", blackAhead);
+  elements.evalBar.setAttribute("aria-label", description);
+  elements.evalBar.setAttribute("aria-valuetext", description);
 }
 
 function render() {

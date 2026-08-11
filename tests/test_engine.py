@@ -3,13 +3,33 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import chess
-from engine import _quiescence, choose_best_move, evaluate_board
+from engine import _quiescence, choose_best_move, evaluate_board, get_evaluation
 import math
 import unittest
 from unittest.mock import patch
 
 
 class EngineTests(unittest.TestCase):
+    def test_get_evaluation_is_even_at_start(self):
+        self.assertEqual(
+            get_evaluation(chess.Board(), depth=1),
+            {"eval": 0, "mate": None, "winner": None},
+        )
+
+    def test_get_evaluation_reports_immediate_white_mate(self):
+        board = chess.Board("7k/5Q2/6K1/8/8/8/8/8 w - - 0 1")
+        result = get_evaluation(board, depth=1)
+        self.assertEqual(result["mate"], 1)
+        self.assertEqual(result["winner"], "white")
+        self.assertIsNone(result["eval"])
+
+    def test_get_evaluation_reports_immediate_black_mate(self):
+        board = chess.Board("7K/5q2/6k1/8/8/8/8/8 b - - 0 1")
+        result = get_evaluation(board, depth=1)
+        self.assertEqual(result["mate"], -1)
+        self.assertEqual(result["winner"], "black")
+        self.assertIsNone(result["eval"])
+
 
     def test_evaluate_board_prefers_centralized_pawn(self):
         # Pawn on e4 (central) vs pawn on a2 (edge)

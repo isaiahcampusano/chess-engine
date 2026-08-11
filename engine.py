@@ -141,6 +141,35 @@ def evaluate_board(board: chess.Board) -> int:
     return score
 
 
+def get_evaluation(board: chess.Board, depth: int = 3) -> dict[str, int | str | None]:
+    """Return a White-relative static evaluation, with short forced mates detected."""
+    if depth < 1:
+        raise ValueError("depth must be at least 1")
+
+    position = board.copy(stack=False)
+    outcome = position.outcome()
+    if outcome is not None:
+        if outcome.winner is None:
+            return {"eval": 0, "mate": None, "winner": None}
+        return {
+            "eval": None,
+            "mate": 0,
+            "winner": "white" if outcome.winner == chess.WHITE else "black",
+        }
+
+    search = choose_best_move(position, depth=depth)
+    white_score = search.score if position.turn == chess.WHITE else -search.score
+    mate_distance = CHECKMATE_SCORE - abs(search.score)
+    if 0 < mate_distance <= depth:
+        return {
+            "eval": None,
+            "mate": mate_distance if white_score > 0 else -mate_distance,
+            "winner": "white" if white_score > 0 else "black",
+        }
+
+    return {"eval": evaluate_board(position), "mate": None, "winner": None}
+
+
 def choose_best_move(
     board: chess.Board,
     depth: int = 3,
@@ -225,6 +254,7 @@ def _search_at_depth(
                 -math.inf,
                 math.inf,
                 deadline,
+                ply=1,
             )
         finally:
             board.pop()
@@ -250,10 +280,11 @@ def _negamax(
     alpha: float,
     beta: float,
     deadline: float | None = None,
+    ply: int = 0,
 ) -> tuple[int, int]:
     _check_deadline(deadline)
     if depth == 0 or board.is_game_over():
-        return _quiescence(board, alpha, beta, deadline)
+        return _quiescence(board, alpha, beta, deadline, ply)
 
     best_score = -math.inf
     nodes = 0
@@ -268,6 +299,7 @@ def _negamax(
                 -beta,
                 -alpha,
                 deadline,
+                ply + 1,
             )
         finally:
             board.pop()
@@ -288,9 +320,15 @@ def _quiescence(
     alpha: float,
     beta: float,
     deadline: float | None = None,
+    ply: int = 0,
 ) -> tuple[int, int]:
     """Search only captures to reduce the horizon effect."""
     _check_deadline(deadline)
+    if board.is_checkmate():
+        return -CHECKMATE_SCORE + ply, 1
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0, 1
+
     side_multiplier = 1 if board.turn == chess.WHITE else -1
     stand_pat = evaluate_board(board) * side_multiplier
     if stand_pat >= beta:
@@ -307,7 +345,7 @@ def _quiescence(
         _check_deadline(deadline)
         board.push(move)
         try:
-            score, searched = _quiescence(board, -beta, -alpha, deadline)
+            score, searched = _quiescence(board, -beta, -alpha, deadline, ply + 1)
         finally:
             board.pop()
 
