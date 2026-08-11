@@ -51,27 +51,43 @@
             </span>
           </div>
 
-          <div class="board-frame">
-            <p id="boardInstructions" class="sr-only">
-              Select a White piece by clicking it or pressing Enter. Legal destinations will be
-              announced and marked on the board. Use the arrow keys to move between squares,
-              Enter or Space to select, and Escape to cancel. In planning mode, select a piece
-              belonging to the side to move and build a hypothetical sequence.
-            </p>
+          <div class="board-stage">
             <div
-              id="myBoard"
-              class="chessboard"
-              aria-label="Interactive chess board"
-              aria-describedby="boardInstructions"
+              id="evalBar"
+              class="eval-bar"
+              role="meter"
+              aria-label="Position evaluation: even"
+              aria-valuemin="-5"
+              aria-valuemax="5"
+              aria-valuenow="0"
             >
-              <svg
-                id="planningArrows"
-                class="planning-arrows"
-                aria-hidden="true"
-                hidden
-              ></svg>
+              <div id="evalBlackFill" class="eval-fill eval-black" style="height: 50%"></div>
+              <div id="evalWhiteFill" class="eval-fill eval-white" style="height: 50%"></div>
+              <span id="evalBarScore" class="eval-score">0.00</span>
             </div>
-            <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
+
+            <div class="board-frame">
+              <p id="boardInstructions" class="sr-only">
+                Select a White piece by clicking it or pressing Enter. Legal destinations will be
+                announced and marked on the board. Use the arrow keys to move between squares,
+                Enter or Space to select, and Escape to cancel. In planning mode, select a piece
+                belonging to the side to move and build a hypothetical sequence.
+              </p>
+              <div
+                id="myBoard"
+                class="chessboard"
+                aria-label="Interactive chess board"
+                aria-describedby="boardInstructions"
+              >
+                <svg
+                  id="planningArrows"
+                  class="planning-arrows"
+                  aria-hidden="true"
+                  hidden
+                ></svg>
+              </div>
+              <div id="boardOverlay" class="board-overlay" hidden aria-hidden="true"></div>
+            </div>
           </div>
 
           <div class="player-strip">

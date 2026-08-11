@@ -66,6 +66,13 @@ class WebAppTests(unittest.TestCase):
                 with self.subTest(element_id=element_id):
                     self.assertIn(b'id="' + element_id + b'"', response.data)
 
+    def test_home_page_includes_live_evaluation_bar(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            for element_id in (b"evalBar", b"evalBlackFill", b"evalWhiteFill", b"evalBarScore"):
+                with self.subTest(element_id=element_id):
+                    self.assertIn(b'id="' + element_id + b'"', response.data)
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):
@@ -209,6 +216,22 @@ class WebAppTests(unittest.TestCase):
             response = self.client.post("/analysis", json={"moves": ["e2e5"]})
         self.assertEqual(response.status_code, 400)
         self.assertIn("not legal", response.get_json()["error"])
+
+    def test_evaluation_endpoint_returns_engine_evaluation(self) -> None:
+        result = {"eval": 35, "mate": None, "winner": None}
+        with patch("app.get_evaluation", return_value=result) as evaluate:
+            response = self.client.post("/api/eval", json={"fen": chess.STARTING_FEN})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), result)
+        evaluated_board = evaluate.call_args.args[0]
+        self.assertEqual(evaluated_board.fen(), chess.STARTING_FEN)
+        self.assertEqual(evaluate.call_args.kwargs["depth"], 3)
+
+    def test_evaluation_endpoint_rejects_invalid_fen(self) -> None:
+        response = self.client.post("/api/eval", json={"fen": "not-a-fen"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("invalid", response.get_json()["error"].lower())
 
 
 if __name__ == "__main__":

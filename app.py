@@ -6,7 +6,7 @@ import chess
 from flask import Flask, jsonify, request
 
 from analysis import MAX_GAME_PLIES, analyse_game
-from engine import choose_best_move
+from engine import choose_best_move, get_evaluation
 
 
 ENGINE_DEPTH = 3
@@ -104,6 +104,32 @@ def handle_analysis():
         return _error("The game could not be analyzed.", 500)
 
     return jsonify(result)
+
+
+@app.post("/api/eval")
+def handle_evaluation():
+    """Evaluate a supplied position for the live advantage bar."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _error("Request body must be a JSON object.", 400)
+
+    fen = payload.get("fen")
+    if not isinstance(fen, str) or not fen.strip():
+        return _error("A non-empty 'fen' string is required.", 400)
+
+    try:
+        board = chess.Board(fen.strip())
+    except ValueError:
+        return _error("The supplied FEN is invalid.", 400)
+
+    if not board.is_valid():
+        return _error("The supplied FEN does not describe a valid chess position.", 400)
+
+    try:
+        return jsonify(get_evaluation(board, depth=ENGINE_DEPTH))
+    except Exception:
+        app.logger.exception("Position evaluation failed")
+        return _error("The position could not be evaluated.", 500)
 
 
 def _error(message: str, status_code: int):
