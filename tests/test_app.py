@@ -86,7 +86,14 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             response.get_json(),
-            {"status": "ok", "selected": "expert", "depth": 3, "label": "Expert"},
+            {
+                "status": "ok",
+                "selected": "expert",
+                "depth": 3,
+                "label": "Expert",
+                "active_game_bot": "expert",
+                "game_active": False,
+            },
         )
 
     def test_bot_selection_is_stored_in_session(self) -> None:
@@ -101,6 +108,18 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid bot ID", response.get_json()["error"])
+
+    def test_new_game_uses_preferred_bot_and_opens_selection(self) -> None:
+        self.client.post("/select_bot", json={"bot_id": "novice"})
+
+        response = self.client.post("/new_game")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["bot"], "novice")
+        self.assertFalse(response.get_json()["game_active"])
+        with self.client.session_transaction() as game_session:
+            self.assertEqual(game_session["active_game_bot"], "novice")
+            self.assertFalse(game_session["game_started"])
 
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
@@ -153,6 +172,50 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(search.call_args.kwargs["depth"], 1)
+
+    def test_active_game_bot_stays_frozen_when_preference_changes(self) -> None:
+        board = chess.Board()
+        novice_result = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=12,
+            nodes=20,
+            depth=1,
+        )
+        self.client.post("/select_bot", json={"bot_id": "novice"})
+        self.client.post("/new_game")
+
+        with patch("app.choose_best_move", return_value=novice_result) as search:
+            first_move = self.client.post("/move", json={"fen": board.fen()})
+            selection = self.client.post("/select_bot", json={"bot_id": "expert"})
+            second_move = self.client.post("/move", json={"fen": board.fen()})
+
+        self.assertEqual(first_move.status_code, 200)
+        self.assertEqual(second_move.status_code, 200)
+        self.assertEqual(selection.get_json()["status"], "preference_saved")
+        self.assertEqual(selection.get_json()["current_game_bot"], "novice")
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [1, 1])
+
+    def test_saved_preference_applies_to_the_next_new_game(self) -> None:
+        board = chess.Board()
+        result = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=12,
+            nodes=20,
+            depth=3,
+        )
+        self.client.post("/select_bot", json={"bot_id": "novice"})
+        self.client.post("/new_game")
+        with patch("app.choose_best_move", return_value=result):
+            self.client.post("/move", json={"fen": board.fen()})
+        self.client.post("/select_bot", json={"bot_id": "expert"})
+
+        new_game_response = self.client.post("/new_game")
+        with patch("app.choose_best_move", return_value=result) as search:
+            move_response = self.client.post("/move", json={"fen": board.fen()})
+
+        self.assertEqual(new_game_response.get_json()["bot"], "expert")
+        self.assertEqual(move_response.status_code, 200)
+        self.assertEqual(search.call_args.kwargs["depth"], 3)
 
     def test_move_endpoint_rejects_missing_json(self) -> None:
         response = self.client.post("/move")

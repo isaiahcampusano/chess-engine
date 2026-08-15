@@ -29,7 +29,7 @@ def index():
 
 @app.route("/select_bot", methods=["GET", "POST"])
 def select_bot():
-    """Return or update the engine opponent stored in the user's session."""
+    """Return or update the preferred opponent without changing an active game."""
     if request.method == "POST":
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -40,6 +40,26 @@ def select_bot():
             return _error("Invalid bot ID.", 400)
         session["bot"] = bot_id
 
+        if session.get("game_started", False):
+            active_bot_id = _active_game_bot_id()
+            return jsonify(
+                {
+                    "status": "preference_saved",
+                    "selected": bot_id,
+                    "depth": BOTS[bot_id]["depth"],
+                    "label": BOTS[bot_id]["label"],
+                    "message": (
+                        f"{BOTS[bot_id]['label']} is saved for the next game."
+                    ),
+                    "current_game_bot": active_bot_id,
+                    "current_game_depth": BOTS[active_bot_id]["depth"],
+                    "current_game_label": BOTS[active_bot_id]["label"],
+                    "game_active": True,
+                }
+            )
+
+        session["active_game_bot"] = bot_id
+
     bot_id = _selected_bot_id()
     return jsonify(
         {
@@ -47,6 +67,27 @@ def select_bot():
             "selected": bot_id,
             "depth": BOTS[bot_id]["depth"],
             "label": BOTS[bot_id]["label"],
+            "active_game_bot": _active_game_bot_id(),
+            "game_active": session.get("game_started", False),
+        }
+    )
+
+
+@app.post("/new_game")
+def new_game():
+    """Open a new pre-game window and seed it with the preferred opponent."""
+    bot_id = _selected_bot_id()
+    session["active_game_bot"] = bot_id
+    session["game_started"] = False
+    return jsonify(
+        {
+            "status": "ok",
+            "selected": bot_id,
+            "bot": bot_id,
+            "depth": BOTS[bot_id]["depth"],
+            "label": BOTS[bot_id]["label"],
+            "active_game_bot": bot_id,
+            "game_active": False,
         }
     )
 
@@ -71,6 +112,7 @@ def handle_move():
         return _error("The supplied FEN does not describe a valid chess position.", 400)
 
     if board.is_game_over():
+        session["game_started"] = False
         return jsonify(
             {
                 "engine_move": None,
@@ -83,7 +125,8 @@ def handle_move():
         )
 
     try:
-        bot_id = _selected_bot_id()
+        bot_id = _active_game_bot_id()
+        session["game_started"] = True
         result = choose_best_move(
             board,
             depth=BOTS[bot_id]["depth"],
@@ -170,6 +213,14 @@ def _error(message: str, status_code: int):
 def _selected_bot_id() -> str:
     bot_id = session.get("bot", "expert")
     return bot_id if bot_id in BOTS else "expert"
+
+
+def _active_game_bot_id() -> str:
+    bot_id = session.get("active_game_bot")
+    if bot_id not in BOTS:
+        bot_id = _selected_bot_id()
+        session["active_game_bot"] = bot_id
+    return bot_id
 
 
 if __name__ == "__main__":
