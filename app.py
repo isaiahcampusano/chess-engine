@@ -8,7 +8,7 @@ import chess
 from flask import Flask, jsonify, request, session
 
 from analysis import MAX_GAME_PLIES, analyse_game
-from engine import choose_best_move, get_evaluation
+from engine import SearchResult, choose_best_move, get_evaluation
 
 
 ENGINE_TIME_LIMIT_SECONDS = 8.0
@@ -124,20 +124,66 @@ def handle_move():
             }
         )
 
-    try:
-        bot_id = _active_game_bot_id()
-        session["game_started"] = True
-        result = choose_best_move(
-            board,
-            depth=BOTS[bot_id]["depth"],
-            time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
-        )
-    except Exception:
-        app.logger.exception("Chess engine search failed")
-        return _error("The engine could not calculate a move.", 500)
+    bot_id = _active_game_bot_id()
+    session["game_started"] = True
+    max_depth = BOTS[bot_id]["depth"]
+    result: SearchResult | None = None
 
-    if result.move is None or result.move not in board.legal_moves:
-        app.logger.error("Chess engine returned no legal move for FEN: %s", board.fen())
+    search_depths = [max_depth]
+    if max_depth != 1:
+        search_depths.append(1)
+
+    for search_depth in search_depths:
+        try:
+            app.logger.info(
+                "Attempting engine search at depth %s for FEN %s.",
+                search_depth,
+                board.fen(),
+            )
+            candidate = choose_best_move(
+                board,
+                depth=search_depth,
+                time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
+            )
+        except Exception:
+            app.logger.exception(
+                "Engine crashed at depth %s for FEN %s; retrying.",
+                search_depth,
+                board.fen(),
+            )
+            continue
+
+        candidate_move = getattr(candidate, "move", None)
+        if candidate_move is not None and candidate_move in board.legal_moves:
+            result = candidate
+            app.logger.info("Engine returned a legal move at depth %s.", search_depth)
+            break
+
+        app.logger.warning(
+            "Engine returned no legal move at depth %s for FEN %s; retrying.",
+            search_depth,
+            board.fen(),
+        )
+
+    if result is None:
+        legal_moves = list(board.legal_moves)
+        if legal_moves:
+            emergency_move = legal_moves[0]
+            result = SearchResult(
+                move=emergency_move,
+                score=0,
+                nodes=0,
+                depth=0,
+                timed_out=True,
+            )
+            app.logger.critical(
+                "Emergency fallback selected legal move %s for FEN %s.",
+                emergency_move,
+                board.fen(),
+            )
+
+    if result is None or result.move is None or result.move not in board.legal_moves:
+        app.logger.critical("Unable to generate a legal move for FEN: %s", board.fen())
         return _error("The engine did not return a legal move.", 500)
 
     return jsonify(

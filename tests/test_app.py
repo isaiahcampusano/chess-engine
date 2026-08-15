@@ -262,24 +262,73 @@ class WebAppTests(unittest.TestCase):
             },
         )
 
-    def test_engine_failure_returns_server_error(self) -> None:
-        with patch("app.choose_best_move", side_effect=RuntimeError("boom")):
+    def test_engine_failure_uses_emergency_legal_move(self) -> None:
+        board = chess.Board()
+        with patch(
+            "app.choose_best_move",
+            side_effect=RuntimeError("boom"),
+        ) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
-        self.assertEqual(response.status_code, 500)
-        self.assertIn("could not calculate", response.get_json()["error"])
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(chess.Move.from_uci(payload["engine_move"]), board.legal_moves)
+        self.assertEqual(payload["depth"], 0)
+        self.assertTrue(payload["timed_out"])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [3, 1])
+        self.assertTrue(
+            all(
+                call.kwargs["time_limit_seconds"] == web_app.ENGINE_TIME_LIMIT_SECONDS
+                for call in search.call_args_list
+            )
+        )
 
-    def test_illegal_engine_move_returns_server_error(self) -> None:
+    def test_illegal_engine_move_uses_emergency_legal_move(self) -> None:
         result = SearchResult(
             move=chess.Move.from_uci("a1a8"),
             score=0,
             nodes=1,
         )
-        with patch("app.choose_best_move", return_value=result):
+        with patch("app.choose_best_move", return_value=result) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
-        self.assertEqual(response.status_code, 500)
-        self.assertIn("legal move", response.get_json()["error"])
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            chess.Move.from_uci(payload["engine_move"]),
+            chess.Board().legal_moves,
+        )
+        self.assertEqual(payload["depth"], 0)
+        self.assertTrue(payload["timed_out"])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [3, 1])
+
+    def test_move_endpoint_retries_at_depth_one_after_none_result(self) -> None:
+        fallback = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=15,
+            nodes=20,
+            depth=1,
+            timed_out=True,
+        )
+
+        with patch("app.choose_best_move", side_effect=[None, fallback]) as search:
+            response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["engine_move"], "e2e4")
+        self.assertEqual(response.get_json()["depth"], 1)
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [3, 1])
+
+    def test_novice_failure_skips_duplicate_depth_one_retry(self) -> None:
+        self.client.post("/select_bot", json={"bot_id": "novice"})
+
+        with patch("app.choose_best_move", side_effect=RuntimeError("boom")) as search:
+            response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["depth"], 0)
+        search.assert_called_once()
+        self.assertEqual(search.call_args.kwargs["depth"], 1)
 
     def test_timed_out_search_returns_best_available_move(self) -> None:
         result = SearchResult(

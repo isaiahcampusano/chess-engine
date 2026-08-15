@@ -188,36 +188,87 @@ def choose_best_move(
     if board.is_game_over():
         return SearchResult(move=None, score=evaluate_board(board), nodes=0, depth=0)
 
-    if time_limit_seconds is None:
-        return _search_at_depth(board, depth)
+    logger.info("Engine called on FEN: %s", board.fen())
 
-    deadline = perf_counter() + time_limit_seconds
     completed_result: SearchResult | None = None
+    interrupted_result: SearchResult | None = None
     completed_nodes = 0
     timed_out = False
 
-    for current_depth in range(1, depth + 1):
+    if time_limit_seconds is None:
         try:
-            result = _search_at_depth(board, current_depth, deadline)
-        except _SearchDeadlineExceeded:
+            result = _search_at_depth(board, depth)
+        except Exception:
+            logger.exception(
+                "Unrestricted depth-%s search crashed for FEN %s.",
+                depth,
+                board.fen(),
+            )
             timed_out = True
-            break
-
-        completed_nodes += result.nodes
-        completed_result = SearchResult(
-            move=result.move,
-            score=result.score,
-            nodes=completed_nodes,
-            depth=current_depth,
+        else:
+            if result.move is not None and result.move in board.legal_moves:
+                return result
+            timed_out = result.timed_out
+        logger.warning(
+            "Unrestricted depth-%s search returned no legal move for FEN %s; "
+            "starting fallback tiers.",
+            depth,
+            board.fen(),
         )
+    else:
+        deadline = perf_counter() + time_limit_seconds
+        for current_depth in range(1, depth + 1):
+            try:
+                result = _search_at_depth(board, current_depth, deadline)
+            except _SearchDeadlineExceeded:
+                timed_out = True
+                break
+            except Exception:
+                logger.exception(
+                    "Main search crashed at depth %s for FEN %s.",
+                    current_depth,
+                    board.fen(),
+                )
+                timed_out = True
+                break
 
-    if completed_result is not None and completed_result.move is not None:
+            completed_nodes += result.nodes
+            if result.timed_out:
+                timed_out = True
+                interrupted_result = result
+                break
+
+            completed_result = SearchResult(
+                move=result.move,
+                score=result.score,
+                nodes=completed_nodes,
+                depth=current_depth,
+            )
+
+    if (
+        completed_result is not None
+        and completed_result.move is not None
+        and completed_result.move in board.legal_moves
+    ):
         return SearchResult(
             move=completed_result.move,
             score=completed_result.score,
             nodes=completed_result.nodes,
             depth=completed_result.depth,
             timed_out=timed_out,
+        )
+
+    if (
+        interrupted_result is not None
+        and interrupted_result.move is not None
+        and interrupted_result.move in board.legal_moves
+    ):
+        return SearchResult(
+            move=interrupted_result.move,
+            score=interrupted_result.score,
+            nodes=completed_nodes,
+            depth=interrupted_result.depth,
+            timed_out=True,
         )
 
     logger.warning(
@@ -227,8 +278,11 @@ def choose_best_move(
     )
 
     try:
-        fallback_result = _search_at_depth(board, 1)
-        if fallback_result.move is not None:
+        fallback_result = _search_at_depth(board, 1, deadline=None)
+        if (
+            fallback_result.move is not None
+            and fallback_result.move in board.legal_moves
+        ):
             return SearchResult(
                 move=fallback_result.move,
                 score=fallback_result.score,
@@ -239,8 +293,8 @@ def choose_best_move(
     except Exception:
         logger.exception("Depth-1 fallback search failed; using the safety-net move.")
 
-    ordered_moves = _ordered_moves(board)
-    if not ordered_moves:
+    legal_moves = list(board.legal_moves)
+    if not legal_moves:
         logger.error("No legal moves were available for the ultimate fallback.")
         return SearchResult(
             move=None,
@@ -250,13 +304,13 @@ def choose_best_move(
             timed_out=True,
         )
 
-    fallback_move = ordered_moves[0]
-    board.push(fallback_move)
-    try:
-        side_multiplier = 1 if board.turn == chess.WHITE else -1
-        fallback_score = -evaluate_board(board) * side_multiplier
-    finally:
-        board.pop()
+    fallback_move = legal_moves[0]
+    fallback_score = _score_move_for_side_to_move(board, fallback_move)
+    logger.critical(
+        "Using absolute last-resort move %s for FEN %s.",
+        fallback_move,
+        board.fen(),
+    )
 
     return SearchResult(
         move=fallback_move,
@@ -272,49 +326,111 @@ def _search_at_depth(
     depth: int,
     deadline: float | None = None,
 ) -> SearchResult:
-    _check_deadline(deadline)
-    ordered_moves = _ordered_moves(board)
-    if not ordered_moves:
-        logger.error("No legal moves available at depth %s; returning no move.", depth)
-        return SearchResult(
-            move=None,
-            score=evaluate_board(board),
-            nodes=0,
-            depth=depth,
-        )
-
-    best_move = ordered_moves[0]
+    best_move: chess.Move | None = None
     best_score = -math.inf
     nodes = 0
 
-    for move in ordered_moves:
+    try:
         _check_deadline(deadline)
-        board.push(move)
-        try:
-            score, searched = _negamax(
-                board,
-                depth - 1,
-                -math.inf,
-                math.inf,
-                deadline,
-                ply=1,
+        ordered_moves = _ordered_moves(board)
+        if not ordered_moves:
+            logger.error("No legal moves available at depth %s; returning no move.", depth)
+            return SearchResult(
+                move=None,
+                score=evaluate_board(board),
+                nodes=0,
+                depth=depth,
             )
-        finally:
-            board.pop()
 
-        score = -score
-        nodes += searched + 1
+        best_move = ordered_moves[0]
+        for move in ordered_moves:
+            _check_deadline(deadline)
+            board.push(move)
+            try:
+                score, searched = _negamax(
+                    board,
+                    depth - 1,
+                    -math.inf,
+                    math.inf,
+                    deadline,
+                    ply=1,
+                )
+            finally:
+                board.pop()
 
-        if score > best_score:
-            best_score = score
-            best_move = move
+            score = -score
+            nodes += searched + 1
 
-    return SearchResult(
-        move=best_move,
-        score=int(best_score),
-        nodes=nodes,
-        depth=depth,
-    )
+            if score > best_score:
+                best_score = score
+                best_move = move
+
+        return SearchResult(
+            move=best_move,
+            score=int(best_score),
+            nodes=nodes,
+            depth=depth,
+        )
+    except _SearchDeadlineExceeded:
+        fallback_move = _legal_fallback_move(board, best_move)
+        logger.warning(
+            "Search timed out at depth %s for FEN %s; returning fallback move %s.",
+            depth,
+            board.fen(),
+            fallback_move,
+        )
+        return SearchResult(
+            move=fallback_move,
+            score=(
+                int(best_score)
+                if math.isfinite(best_score)
+                else _fallback_score(board, fallback_move)
+            ),
+            nodes=nodes,
+            depth=depth,
+            timed_out=True,
+        )
+    except Exception:
+        logger.exception(
+            "Search crashed at depth %s for FEN %s; returning a legal fallback.",
+            depth,
+            board.fen(),
+        )
+        fallback_move = _legal_fallback_move(board, best_move)
+        return SearchResult(
+            move=fallback_move,
+            score=_fallback_score(board, fallback_move),
+            nodes=nodes,
+            depth=depth,
+            timed_out=True,
+        )
+
+
+def _legal_fallback_move(
+    board: chess.Board,
+    preferred_move: chess.Move | None = None,
+) -> chess.Move | None:
+    """Return a known legal move without depending on move ordering."""
+    legal_moves = list(board.legal_moves)
+    if preferred_move is not None and preferred_move in legal_moves:
+        return preferred_move
+    return legal_moves[0] if legal_moves else None
+
+
+def _fallback_score(board: chess.Board, move: chess.Move | None) -> int:
+    if move is None:
+        return evaluate_board(board)
+    return _score_move_for_side_to_move(board, move)
+
+
+def _score_move_for_side_to_move(board: chess.Board, move: chess.Move) -> int:
+    root_turn = board.turn
+    board.push(move)
+    try:
+        white_score = evaluate_board(board)
+    finally:
+        board.pop()
+    return white_score if root_turn == chess.WHITE else -white_score
 
 
 def _negamax(

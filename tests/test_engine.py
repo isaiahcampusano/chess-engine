@@ -99,6 +99,26 @@ class EngineTests(unittest.TestCase):
         self.assertIsNotNone(search.call_args_list[0].args[2])
         self.assertEqual(len(search.call_args_list[1].args), 2)
 
+    def test_arbitrary_main_search_crash_uses_depth_one_fallback(self) -> None:
+        board = chess.Board()
+        fallback = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=25,
+            nodes=20,
+            depth=1,
+        )
+
+        with patch(
+            "engine._search_at_depth",
+            side_effect=[RuntimeError("main failed"), fallback],
+        ) as search:
+            result = choose_best_move(board, depth=3, time_limit_seconds=1)
+
+        self.assertEqual(result.move, fallback.move)
+        self.assertEqual(result.depth, 1)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(search.call_count, 2)
+
     def test_ordered_move_is_only_used_when_depth_one_fallback_fails(self) -> None:
         board = chess.Board()
         original_fen = board.fen()
@@ -132,6 +152,75 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(board.fen(), original_fen)
         self.assertEqual(result.depth, 1)
         self.assertTrue(result.timed_out)
+
+    def test_handoff_issue_20_position_returns_a_legal_move(self) -> None:
+        board = chess.Board(
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2P2P2/PP1P1P1P/RNBQK2R w KQkq - 0 7"
+        )
+        original_fen = board.fen()
+
+        result = choose_best_move(board, depth=3)
+
+        self.assertIsNotNone(result.move)
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(board.fen(), original_fen)
+
+    def test_search_crash_returns_legal_move_and_restores_board(self) -> None:
+        board = chess.Board()
+        original_fen = board.fen()
+
+        with self.assertLogs("engine", level="ERROR") as logs:
+            with patch("engine._negamax", side_effect=RuntimeError("boom")):
+                result = _search_at_depth(board, depth=3)
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(board.fen(), original_fen)
+        self.assertEqual(result.depth, 3)
+        self.assertTrue(result.timed_out)
+        self.assertTrue(any("Search crashed" in entry for entry in logs.output))
+
+    def test_move_ordering_crash_still_returns_a_legal_move(self) -> None:
+        board = chess.Board()
+
+        with patch("engine._ordered_moves", side_effect=AttributeError("corrupt")):
+            result = _search_at_depth(board, depth=3)
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(result.nodes, 0)
+        self.assertTrue(result.timed_out)
+
+    def test_search_timeout_returns_legal_move_and_restores_board(self) -> None:
+        board = chess.Board()
+        original_fen = board.fen()
+
+        with patch(
+            "engine._check_deadline",
+            side_effect=[None, _SearchDeadlineExceeded],
+        ):
+            result = _search_at_depth(board, depth=3, deadline=1.0)
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(board.fen(), original_fen)
+        self.assertEqual(result.depth, 3)
+        self.assertTrue(result.timed_out)
+
+    def test_iterative_deepening_stops_when_wrapped_search_times_out(self) -> None:
+        board = chess.Board()
+        timed_out_result = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=10,
+            nodes=4,
+            depth=1,
+            timed_out=True,
+        )
+
+        with patch("engine._search_at_depth", return_value=timed_out_result) as search:
+            result = choose_best_move(board, depth=3, time_limit_seconds=1)
+
+        self.assertEqual(result.move, timed_out_result.move)
+        self.assertEqual(result.nodes, timed_out_result.nodes)
+        self.assertTrue(result.timed_out)
+        search.assert_called_once()
 
     def test_search_without_legal_moves_returns_a_scored_empty_result(self) -> None:
         board = chess.Board("7k/5Q2/7K/8/8/8/8/8 b - - 0 1")
