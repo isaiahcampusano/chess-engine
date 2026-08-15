@@ -3,7 +3,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import chess
-from engine import _quiescence, choose_best_move, evaluate_board, get_evaluation
+from engine import (
+    SearchResult,
+    _SearchDeadlineExceeded,
+    _quiescence,
+    _search_at_depth,
+    choose_best_move,
+    evaluate_board,
+    get_evaluation,
+)
 import math
 import unittest
 from unittest.mock import patch
@@ -64,8 +72,76 @@ class EngineTests(unittest.TestCase):
 
         self.assertIn(result.move, board.legal_moves)
         self.assertEqual(board.fen(), original_fen)
-        self.assertEqual(result.depth, 0)
+        self.assertEqual(result.depth, 1)
         self.assertTrue(result.timed_out)
+
+    def test_depth_one_search_is_primary_emergency_fallback(self) -> None:
+        board = chess.Board()
+        fallback = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=25,
+            nodes=20,
+            depth=1,
+        )
+
+        with patch(
+            "engine._search_at_depth",
+            side_effect=[_SearchDeadlineExceeded, fallback],
+        ) as search:
+            result = choose_best_move(board, depth=3, time_limit_seconds=1)
+
+        self.assertEqual(result.move, fallback.move)
+        self.assertEqual(result.score, fallback.score)
+        self.assertEqual(result.nodes, fallback.nodes)
+        self.assertEqual(result.depth, 1)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(search.call_count, 2)
+        self.assertIsNotNone(search.call_args_list[0].args[2])
+        self.assertEqual(len(search.call_args_list[1].args), 2)
+
+    def test_ordered_move_is_only_used_when_depth_one_fallback_fails(self) -> None:
+        board = chess.Board()
+        original_fen = board.fen()
+
+        with patch(
+            "engine._search_at_depth",
+            side_effect=[_SearchDeadlineExceeded, RuntimeError("fallback failed")],
+        ):
+            result = choose_best_move(board, depth=3, time_limit_seconds=1)
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(board.fen(), original_fen)
+        self.assertEqual(result.depth, 0)
+        self.assertEqual(result.nodes, 0)
+        self.assertTrue(result.timed_out)
+
+    def test_issue_20_position_returns_a_legal_move_after_immediate_timeout(self) -> None:
+        board = chess.Board(
+            "r2qkb1r/ppp1pppp/2n1b3/3n4/2B5/2P2P2/PP1PN1PP/RNBQK2R b KQkq - 3 6"
+        )
+        original_fen = board.fen()
+
+        def expire_only_timed_search(deadline: float | None) -> None:
+            if deadline is not None:
+                raise _SearchDeadlineExceeded
+
+        with patch("engine._check_deadline", side_effect=expire_only_timed_search):
+            result = choose_best_move(board, depth=3, time_limit_seconds=1)
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(board.fen(), original_fen)
+        self.assertEqual(result.depth, 1)
+        self.assertTrue(result.timed_out)
+
+    def test_search_without_legal_moves_returns_a_scored_empty_result(self) -> None:
+        board = chess.Board("7k/5Q2/7K/8/8/8/8/8 b - - 0 1")
+
+        result = _search_at_depth(board, depth=1)
+
+        self.assertIsNone(result.move)
+        self.assertEqual(result.score, evaluate_board(board))
+        self.assertEqual(result.nodes, 0)
+        self.assertEqual(result.depth, 1)
 
 
 if __name__ == "__main__":

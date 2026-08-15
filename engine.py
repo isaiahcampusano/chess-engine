@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from time import perf_counter
 
 import chess
 
+
+logger = logging.getLogger(__name__)
 
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -208,7 +211,7 @@ def choose_best_move(
             depth=current_depth,
         )
 
-    if completed_result is not None:
+    if completed_result is not None and completed_result.move is not None:
         return SearchResult(
             move=completed_result.move,
             score=completed_result.score,
@@ -217,7 +220,37 @@ def choose_best_move(
             timed_out=timed_out,
         )
 
-    fallback_move = _ordered_moves(board)[0]
+    logger.warning(
+        "Main search failed or timed out before completing depth 1 of %s; "
+        "using an unrestricted depth-1 fallback.",
+        depth,
+    )
+
+    try:
+        fallback_result = _search_at_depth(board, 1)
+        if fallback_result.move is not None:
+            return SearchResult(
+                move=fallback_result.move,
+                score=fallback_result.score,
+                nodes=fallback_result.nodes,
+                depth=1,
+                timed_out=True,
+            )
+    except Exception:
+        logger.exception("Depth-1 fallback search failed; using the safety-net move.")
+
+    ordered_moves = _ordered_moves(board)
+    if not ordered_moves:
+        logger.error("No legal moves were available for the ultimate fallback.")
+        return SearchResult(
+            move=None,
+            score=evaluate_board(board),
+            nodes=0,
+            depth=0,
+            timed_out=True,
+        )
+
+    fallback_move = ordered_moves[0]
     board.push(fallback_move)
     try:
         side_multiplier = 1 if board.turn == chess.WHITE else -1
@@ -240,11 +273,21 @@ def _search_at_depth(
     deadline: float | None = None,
 ) -> SearchResult:
     _check_deadline(deadline)
-    best_move: chess.Move | None = None
+    ordered_moves = _ordered_moves(board)
+    if not ordered_moves:
+        logger.error("No legal moves available at depth %s; returning no move.", depth)
+        return SearchResult(
+            move=None,
+            score=evaluate_board(board),
+            nodes=0,
+            depth=depth,
+        )
+
+    best_move = ordered_moves[0]
     best_score = -math.inf
     nodes = 0
 
-    for move in _ordered_moves(board):
+    for move in ordered_moves:
         _check_deadline(deadline)
         board.push(move)
         try:
