@@ -139,6 +139,70 @@ h1 {
   align-items: start;
 }
 
+.bot-selector-card {
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+}
+
+.bot-selector-card h2 {
+  margin-bottom: 14px;
+  font-size: 1.15rem;
+}
+
+.bot-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bot-button {
+  display: grid;
+  gap: 4px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-raised);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.bot-button:hover:not(:disabled) {
+  border-color: rgba(214, 243, 106, 0.45);
+  transform: translateY(-1px);
+}
+
+.bot-button:focus-visible {
+  outline: 3px solid rgba(214, 243, 106, 0.4);
+  outline-offset: 2px;
+}
+
+.bot-button.active {
+  border-color: var(--accent);
+  background: rgba(214, 243, 106, 0.12);
+}
+
+.bot-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.bot-button span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.bot-selection-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .board-column {
   min-width: 0;
 }

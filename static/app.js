@@ -103,11 +103,15 @@ const elements = {
   analysisResult: document.querySelector("#analysisResult"),
   board: document.querySelector("#myBoard"),
   boardOverlay: document.querySelector("#boardOverlay"),
+  botButtons: document.querySelectorAll("[data-bot]"),
+  botSelectionStatus: document.querySelector("#botSelectionStatus"),
   clearPlanButton: document.querySelector("#clearPlanButton"),
   closeAnalysisButton: document.querySelector("#closeAnalysisButton"),
   copyPlanButton: document.querySelector("#copyPlanButton"),
   cancelPromotionButton: document.querySelector("#cancelPromotionButton"),
   dependencyAlert: document.querySelector("#dependencyAlert"),
+  depthBadge: document.querySelector("#depthBadge"),
+  depthBadgeValue: document.querySelector("#depthBadgeValue"),
   errorBox: document.querySelector("#errorBox"),
   evaluationValue: document.querySelector("#evaluationValue"),
   evalBar: document.querySelector("#evalBar"),
@@ -119,6 +123,7 @@ const elements = {
   newGameButton: document.querySelector("#newGameButton"),
   nextAnalysisButton: document.querySelector("#nextAnalysisButton"),
   nodesValue: document.querySelector("#nodesValue"),
+  opponentName: document.querySelector("#opponentName"),
   promotionDialog: document.querySelector("#promotionDialog"),
   promotionOptions: document.querySelectorAll("[data-promotion]"),
   planMovesButton: document.querySelector("#planMovesButton"),
@@ -160,6 +165,7 @@ let lastMove = null;
 let interactionMessage = "";
 let engineMoveAnnouncement = "";
 let dragInProgress = false;
+let selectedBot = { id: "expert", label: "Expert", depth: 3 };
 const planningState = {
   isPlanning: false,
   selectedSquare: null,
@@ -201,6 +207,9 @@ function initialize() {
   elements.board.addEventListener("click", handleBoardClick);
   elements.board.addEventListener("keydown", handleBoardKeydown);
   elements.board.addEventListener("focusin", handleBoardFocus);
+  elements.botButtons.forEach((button) => {
+    button.addEventListener("click", selectBot);
+  });
   elements.newGameButton.addEventListener("click", startNewGame);
   elements.reviewGameButton.addEventListener("click", requestGameAnalysis);
   elements.closeAnalysisButton.addEventListener("click", closeGameAnalysis);
@@ -234,7 +243,71 @@ function initialize() {
   elements.dependencyAlert.hidden = true;
   elements.dependencyAlert.classList.remove("is-error");
   render();
+  loadSelectedBot();
   requestLiveEvaluation();
+}
+
+async function loadSelectedBot() {
+  try {
+    const response = await fetch("/select_bot");
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      renderSelectedBot(data);
+    }
+  } catch {
+    // The server defaults to Expert, which already matches the initial UI.
+  }
+}
+
+async function selectBot(event) {
+  const button = event.currentTarget;
+  const botId = button.dataset.bot;
+  elements.botButtons.forEach((item) => {
+    item.disabled = true;
+  });
+  elements.botSelectionStatus.textContent = `Selecting ${button.querySelector("strong").textContent}…`;
+
+  try {
+    const response = await fetch("/select_bot", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bot_id: botId }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "The opponent could not be changed.");
+    }
+    renderSelectedBot(data);
+  } catch (error) {
+    elements.botSelectionStatus.textContent =
+      error.message || "The opponent could not be changed. Please try again.";
+  } finally {
+    elements.botButtons.forEach((item) => {
+      item.disabled = false;
+    });
+  }
+}
+
+function renderSelectedBot(data) {
+  const depth = Number(data.depth);
+  selectedBot = {
+    id: data.selected,
+    label: data.label,
+    depth,
+  };
+  elements.botButtons.forEach((button) => {
+    const isActive = button.dataset.bot === selectedBot.id;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+  elements.botSelectionStatus.textContent =
+    `${selectedBot.label} is selected. Your next engine move will search at depth ${depth}.`;
+  elements.depthBadgeValue.textContent = String(depth);
+  elements.depthBadge.setAttribute(
+    "aria-label",
+    `${selectedBot.label} engine search depth ${depth}`,
+  );
+  elements.opponentName.textContent = `${selectedBot.label} Engine`;
 }
 
 function onDragStart(source, piece) {
@@ -1544,7 +1617,8 @@ function renderStatus() {
 
   if (isThinking) {
     elements.statusHeading.textContent = "Engine is thinking";
-    elements.statusDescription.textContent = "Searching the position at depth 3…";
+    elements.statusDescription.textContent =
+      `${selectedBot.label} is searching the position at depth ${selectedBot.depth}…`;
     return;
   }
 

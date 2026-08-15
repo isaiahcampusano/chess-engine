@@ -73,6 +73,35 @@ class WebAppTests(unittest.TestCase):
                 with self.subTest(element_id=element_id):
                     self.assertIn(b'id="' + element_id + b'"', response.data)
 
+    def test_home_page_includes_bot_selector(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'data-bot="novice"', response.data)
+            self.assertIn(b'data-bot="expert"', response.data)
+            self.assertIn(b'id="botSelectionStatus"', response.data)
+
+    def test_bot_selection_defaults_to_expert(self) -> None:
+        response = self.client.get("/select_bot")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {"status": "ok", "selected": "expert", "depth": 3, "label": "Expert"},
+        )
+
+    def test_bot_selection_is_stored_in_session(self) -> None:
+        response = self.client.post("/select_bot", json={"bot_id": "novice"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["selected"], "novice")
+        self.assertEqual(self.client.get("/select_bot").get_json()["selected"], "novice")
+
+    def test_bot_selection_rejects_invalid_bot(self) -> None:
+        response = self.client.post("/select_bot", json={"bot_id": "grandmaster"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid bot ID", response.get_json()["error"])
+
     def test_static_assets_are_served(self) -> None:
         for path in ("/static/styles.css", "/static/app.js"):
             with self.subTest(path=path):
@@ -108,6 +137,22 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(searched_board.fen(), board.fen())
         self.assertEqual(search.call_args.kwargs["depth"], 3)
         self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 8.0)
+
+    def test_move_endpoint_uses_selected_bot_depth(self) -> None:
+        board = chess.Board()
+        result = SearchResult(
+            move=chess.Move.from_uci("e2e4"),
+            score=12,
+            nodes=20,
+            depth=1,
+        )
+        self.client.post("/select_bot", json={"bot_id": "novice"})
+
+        with patch("app.choose_best_move", return_value=result) as search:
+            response = self.client.post("/move", json={"fen": board.fen()})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(search.call_args.kwargs["depth"], 1)
 
     def test_move_endpoint_rejects_missing_json(self) -> None:
         response = self.client.post("/move")

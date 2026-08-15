@@ -22,9 +22,9 @@
             choose a destination.
           </p>
         </div>
-        <div class="depth-badge" aria-label="Engine search depth 3">
+        <div id="depthBadge" class="depth-badge" aria-label="Expert engine search depth 3">
           <span>Depth</span>
-          <strong>3</strong>
+          <strong id="depthBadgeValue">3</strong>
         </div>
       </header>
 
@@ -42,7 +42,7 @@
           <div class="player-strip opponent">
             <div class="player-icon" aria-hidden="true">AI</div>
             <div>
-              <strong>Python Engine</strong>
+              <strong id="opponentName">Expert Engine</strong>
               <span>Black</span>
             </div>
             <span id="thinkingPill" class="thinking-pill" hidden>
@@ -100,6 +100,36 @@
         </div>
 
         <aside class="game-panel">
+          <section class="bot-selector-card" aria-labelledby="botSelectorHeading">
+            <p class="panel-label">Choose opponent</p>
+            <h2 id="botSelectorHeading">Engine strength</h2>
+            <div class="bot-selector" role="group" aria-label="Engine opponent">
+              <button
+                class="bot-button"
+                type="button"
+                data-bot="novice"
+                data-depth="1"
+                aria-pressed="false"
+              >
+                <strong>Novice</strong>
+                <span>Depth 1</span>
+              </button>
+              <button
+                class="bot-button active"
+                type="button"
+                data-bot="expert"
+                data-depth="3"
+                aria-pressed="true"
+              >
+                <strong>Expert</strong>
+                <span>Depth 3</span>
+              </button>
+            </div>
+            <p id="botSelectionStatus" class="bot-selection-status" role="status" aria-live="polite">
+              Expert is selected. You can switch opponents at any time.
+            </p>
+          </section>
+
           <section class="status-card" aria-labelledby="statusHeading">
             <p class="panel-label">Game status</p>
             <h2 id="statusHeading">Your move</h2>
