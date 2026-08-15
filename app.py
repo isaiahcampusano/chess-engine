@@ -2,23 +2,53 @@
 
 from __future__ import annotations
 
+import os
+
 import chess
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session
 
 from analysis import MAX_GAME_PLIES, analyse_game
 from engine import choose_best_move, get_evaluation
 
 
-ENGINE_DEPTH = 3
 ENGINE_TIME_LIMIT_SECONDS = 8.0
+BOTS = {
+    "novice": {"depth": 1, "label": "Novice"},
+    "expert": {"depth": 3, "label": "Expert"},
+}
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
 
 
 @app.get("/")
 def index():
     """Serve the chess interface."""
     return app.send_static_file("index.html")
+
+
+@app.route("/select_bot", methods=["GET", "POST"])
+def select_bot():
+    """Return or update the engine opponent stored in the user's session."""
+    if request.method == "POST":
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return _error("Request body must be a JSON object.", 400)
+
+        bot_id = payload.get("bot_id")
+        if bot_id not in BOTS:
+            return _error("Invalid bot ID.", 400)
+        session["bot"] = bot_id
+
+    bot_id = _selected_bot_id()
+    return jsonify(
+        {
+            "status": "ok",
+            "selected": bot_id,
+            "depth": BOTS[bot_id]["depth"],
+            "label": BOTS[bot_id]["label"],
+        }
+    )
 
 
 @app.post("/move")
@@ -53,9 +83,10 @@ def handle_move():
         )
 
     try:
+        bot_id = _selected_bot_id()
         result = choose_best_move(
             board,
-            depth=ENGINE_DEPTH,
+            depth=BOTS[bot_id]["depth"],
             time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
         )
     except Exception:
@@ -126,7 +157,7 @@ def handle_evaluation():
         return _error("The supplied FEN does not describe a valid chess position.", 400)
 
     try:
-        return jsonify(get_evaluation(board, depth=ENGINE_DEPTH))
+        return jsonify(get_evaluation(board, depth=BOTS["expert"]["depth"]))
     except Exception:
         app.logger.exception("Position evaluation failed")
         return _error("The position could not be evaluated.", 500)
@@ -134,6 +165,11 @@ def handle_evaluation():
 
 def _error(message: str, status_code: int):
     return jsonify({"error": message}), status_code
+
+
+def _selected_bot_id() -> str:
+    bot_id = session.get("bot", "expert")
+    return bot_id if bot_id in BOTS else "expert"
 
 
 if __name__ == "__main__":
