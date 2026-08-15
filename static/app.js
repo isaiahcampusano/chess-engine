@@ -166,6 +166,9 @@ let interactionMessage = "";
 let engineMoveAnnouncement = "";
 let dragInProgress = false;
 let selectedBot = { id: "expert", label: "Expert", depth: 3 };
+let gameActive = false;
+let isStartingGame = false;
+let botRequestInFlight = false;
 const planningState = {
   isPlanning: false,
   selectedSquare: null,
@@ -243,28 +246,20 @@ function initialize() {
   elements.dependencyAlert.hidden = true;
   elements.dependencyAlert.classList.remove("is-error");
   render();
-  loadSelectedBot();
-  requestLiveEvaluation();
-}
-
-async function loadSelectedBot() {
-  try {
-    const response = await fetch("/select_bot");
-    const data = await response.json().catch(() => ({}));
-    if (response.ok) {
-      renderSelectedBot(data);
-    }
-  } catch {
-    // The server defaults to Expert, which already matches the initial UI.
-  }
+  startNewGame();
 }
 
 async function selectBot(event) {
+  if (gameActive) {
+    elements.botSelectionStatus.textContent =
+      "The opponent is locked for this game. Start a new game to choose another.";
+    return;
+  }
+
   const button = event.currentTarget;
   const botId = button.dataset.bot;
-  elements.botButtons.forEach((item) => {
-    item.disabled = true;
-  });
+  botRequestInFlight = true;
+  renderBotSelector();
   elements.botSelectionStatus.textContent = `Selecting ${button.querySelector("strong").textContent}…`;
 
   try {
@@ -282,9 +277,8 @@ async function selectBot(event) {
     elements.botSelectionStatus.textContent =
       error.message || "The opponent could not be changed. Please try again.";
   } finally {
-    elements.botButtons.forEach((item) => {
-      item.disabled = false;
-    });
+    botRequestInFlight = false;
+    renderBotSelector();
   }
 }
 
@@ -300,8 +294,16 @@ function renderSelectedBot(data) {
     button.classList.toggle("active", isActive);
     button.setAttribute("aria-pressed", String(isActive));
   });
-  elements.botSelectionStatus.textContent =
-    `${selectedBot.label} is selected. Your next engine move will search at depth ${depth}.`;
+  if (data.status === "preference_saved") {
+    elements.botSelectionStatus.textContent =
+      `${selectedBot.label} is saved for your next game.`;
+  } else if (gameActive) {
+    elements.botSelectionStatus.textContent =
+      `${selectedBot.label} is locked for this game at depth ${depth}.`;
+  } else {
+    elements.botSelectionStatus.textContent =
+      `${selectedBot.label} selected. Make your first move to lock it in.`;
+  }
   elements.depthBadgeValue.textContent = String(depth);
   elements.depthBadge.setAttribute(
     "aria-label",
@@ -310,11 +312,29 @@ function renderSelectedBot(data) {
   elements.opponentName.textContent = `${selectedBot.label} Engine`;
 }
 
+function renderBotSelector() {
+  elements.botButtons.forEach((button) => {
+    button.disabled = gameActive || isStartingGame || botRequestInFlight;
+  });
+}
+
+function renderBotLockMessage() {
+  if (gameActive) {
+    elements.botSelectionStatus.textContent =
+      `${selectedBot.label} is locked for this game at depth ${selectedBot.depth}.`;
+  } else if (game.isGameOver()) {
+    elements.botSelectionStatus.textContent =
+      "Game over. Choose an opponent for your next game, then select New game.";
+  }
+}
+
 function onDragStart(source, piece) {
   const activeGame = getActiveGame();
   if (
     analysisState.isOpen ||
     analysisState.isLoading ||
+    isStartingGame ||
+    botRequestInFlight ||
     isThinking ||
     pendingPromotion ||
     activeGame.isGameOver() ||
@@ -377,6 +397,9 @@ function playPlayerMove(moveOptions) {
   clearSelection(false);
   lastError = "";
   engineMoveAnnouncement = "";
+  gameActive = !game.isGameOver();
+  renderBotSelector();
+  renderBotLockMessage();
   syncBoard();
   render();
   requestLiveEvaluation();
@@ -544,6 +567,8 @@ function activateSquare(square) {
   if (
     analysisState.isOpen ||
     analysisState.isLoading ||
+    isStartingGame ||
+    botRequestInFlight ||
     isThinking ||
     pendingPromotion ||
     activeGame.isGameOver() ||
@@ -589,6 +614,8 @@ function selectPiece(square) {
   if (
     !piece ||
     piece.color !== activeGame.turn() ||
+    isStartingGame ||
+    botRequestInFlight ||
     isThinking ||
     pendingPromotion ||
     activeGame.isGameOver() ||
@@ -892,6 +919,8 @@ async function requestEngineMove() {
     }
 
     if (data.game_over || !data.engine_move) {
+      gameActive = false;
+      renderBotLockMessage();
       render();
       return;
     }
@@ -909,6 +938,8 @@ async function requestEngineMove() {
       to: completedEngineMove.to,
     };
     engineMoveAnnouncement = `Engine played ${completedEngineMove.san}.`;
+    gameActive = !game.isGameOver();
+    renderBotLockMessage();
     syncBoard();
     lastEngineStats = {
       score: Number(data.score),
@@ -1187,7 +1218,7 @@ function handleAnalysisGraphKeydown(event) {
   }
 }
 
-function startNewGame() {
+async function startNewGame() {
   activeRequestId += 1;
   pendingController?.abort();
   pendingController = null;
@@ -1196,6 +1227,30 @@ function startNewGame() {
   evaluationController = null;
   analysisController?.abort();
   analysisController = null;
+  isStartingGame = true;
+  lastError = "";
+  elements.botSelectionStatus.textContent = "Preparing a new game…";
+  render();
+
+  try {
+    const response = await fetch("/new_game", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || "A new game could not be started.");
+    }
+
+    gameActive = false;
+    renderSelectedBot(data);
+  } catch (error) {
+    lastError = error.message || "A new game could not be started.";
+    elements.botSelectionStatus.textContent =
+      "The new game could not be prepared. Try New game again.";
+    return;
+  } finally {
+    isStartingGame = false;
+    render();
+  }
+
   pendingPromotion = null;
   if (elements.promotionDialog.open) {
     elements.promotionDialog.close();
@@ -1312,6 +1367,7 @@ function render() {
   renderStats();
   renderPlanningPanel();
   renderAnalysisPanel();
+  renderBotSelector();
 
   const canRetry =
     !planningState.isPlanning &&
@@ -1324,7 +1380,9 @@ function render() {
   const searchMessage = getSearchNotice();
   elements.searchNotice.hidden = planningState.isPlanning || !searchMessage;
   elements.searchNotice.textContent = searchMessage;
-  elements.boardOverlay.hidden = !(isThinking || analysisState.isLoading);
+  elements.boardOverlay.hidden = !(
+    isThinking || analysisState.isLoading || isStartingGame || botRequestInFlight
+  );
   elements.thinkingPill.hidden = !isThinking;
   elements.planMovesButton.disabled =
     analysisState.isOpen ||
