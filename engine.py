@@ -6,8 +6,10 @@ import logging
 import math
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Literal
 
 import chess
+import chess.polyglot
 
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,26 @@ class _SearchDeadlineExceeded(Exception):
     """Stop the current search without leaving moves pushed on the board."""
 
 
+@dataclass(frozen=True)
+class _TranspositionEntry:
+    depth: int
+    score: int
+    bound: Literal["exact", "lower", "upper"]
+    best_move: chess.Move | None
+
+
+@dataclass
+class _SearchState:
+    deadline: float | None
+    transposition_table: dict[tuple[int, int], _TranspositionEntry]
+    killer_moves: dict[int, list[chess.Move]]
+    history: dict[tuple[bool, int, int, int | None], int]
+
+    @classmethod
+    def create(cls, deadline: float | None) -> _SearchState:
+        return cls(deadline, {}, {}, {})
+
+
 def _piece_square_score(piece: chess.Piece, square: int) -> int:
     table = PIECE_SQUARE_TABLES[piece.piece_type]
     if piece.color == chess.WHITE:
@@ -178,8 +200,10 @@ def choose_best_move(
     depth: int = 3,
     *,
     time_limit_seconds: float | None = None,
+    debug: bool = False,
 ) -> SearchResult:
     """Pick the best legal move, optionally keeping the search within a deadline."""
+    search_started = perf_counter()
     if depth < 1:
         raise ValueError("depth must be at least 1")
     if time_limit_seconds is not None and time_limit_seconds <= 0:
@@ -188,6 +212,7 @@ def choose_best_move(
     if board.is_game_over():
         return SearchResult(move=None, score=evaluate_board(board), nodes=0, depth=0)
 
+    safety_move = next(iter(board.legal_moves))
     logger.info("Engine called on FEN: %s", board.fen())
 
     completed_result: SearchResult | None = None
@@ -196,8 +221,9 @@ def choose_best_move(
     timed_out = False
 
     if time_limit_seconds is None:
+        state = _SearchState.create(deadline=None)
         try:
-            result = _search_at_depth(board, depth)
+            result = _search_at_depth(board, depth, state=state)
         except Exception:
             logger.exception(
                 "Unrestricted depth-%s search crashed for FEN %s.",
@@ -207,6 +233,7 @@ def choose_best_move(
             timed_out = True
         else:
             if result.move is not None and result.move in board.legal_moves:
+                _log_search_result(board, result, search_started, debug)
                 return result
             timed_out = result.timed_out
         logger.warning(
@@ -216,10 +243,16 @@ def choose_best_move(
             board.fen(),
         )
     else:
-        deadline = perf_counter() + time_limit_seconds
+        deadline = search_started + time_limit_seconds
+        state = _SearchState.create(deadline)
         for current_depth in range(1, depth + 1):
             try:
-                result = _search_at_depth(board, current_depth, deadline)
+                result = _search_at_depth(
+                    board,
+                    current_depth,
+                    deadline,
+                    state=state,
+                )
             except _SearchDeadlineExceeded:
                 timed_out = True
                 break
@@ -244,95 +277,84 @@ def choose_best_move(
                 nodes=completed_nodes,
                 depth=current_depth,
             )
+            _log_search_result(board, completed_result, search_started, debug)
 
     if (
         completed_result is not None
         and completed_result.move is not None
         and completed_result.move in board.legal_moves
     ):
-        return SearchResult(
+        final_result = SearchResult(
             move=completed_result.move,
             score=completed_result.score,
             nodes=completed_result.nodes,
             depth=completed_result.depth,
             timed_out=timed_out,
         )
+        _log_search_result(board, final_result, search_started, debug)
+        return final_result
 
     if (
         interrupted_result is not None
         and interrupted_result.move is not None
         and interrupted_result.move in board.legal_moves
     ):
-        return SearchResult(
+        final_result = SearchResult(
             move=interrupted_result.move,
             score=interrupted_result.score,
             nodes=completed_nodes,
             depth=interrupted_result.depth,
             timed_out=True,
         )
+        _log_search_result(board, final_result, search_started, debug)
+        return final_result
 
     logger.warning(
         "Main search failed or timed out before completing depth 1 of %s; "
-        "using an unrestricted depth-1 fallback.",
+        "using the preselected safety-net move.",
         depth,
     )
 
-    try:
-        fallback_result = _search_at_depth(board, 1, deadline=None)
-        if (
-            fallback_result.move is not None
-            and fallback_result.move in board.legal_moves
-        ):
-            return SearchResult(
-                move=fallback_result.move,
-                score=fallback_result.score,
-                nodes=fallback_result.nodes,
-                depth=1,
-                timed_out=True,
-            )
-    except Exception:
-        logger.exception("Depth-1 fallback search failed; using the safety-net move.")
-
-    legal_moves = list(board.legal_moves)
-    if not legal_moves:
-        logger.error("No legal moves were available for the ultimate fallback.")
-        return SearchResult(
-            move=None,
-            score=evaluate_board(board),
-            nodes=0,
-            depth=0,
-            timed_out=True,
-        )
-
-    fallback_move = legal_moves[0]
-    fallback_score = _score_move_for_side_to_move(board, fallback_move)
+    fallback_score = _score_move_for_side_to_move(board, safety_move)
     logger.critical(
         "Using absolute last-resort move %s for FEN %s.",
-        fallback_move,
+        safety_move,
         board.fen(),
     )
 
-    return SearchResult(
-        move=fallback_move,
+    final_result = SearchResult(
+        move=safety_move,
         score=fallback_score,
         nodes=0,
         depth=0,
         timed_out=True,
     )
+    _log_search_result(board, final_result, search_started, debug)
+    return final_result
 
 
 def _search_at_depth(
     board: chess.Board,
     depth: int,
     deadline: float | None = None,
+    *,
+    state: _SearchState | None = None,
 ) -> SearchResult:
     best_move: chess.Move | None = None
     best_score = -math.inf
     nodes = 0
+    state = state or _SearchState.create(deadline)
+    root_alpha = -math.inf
+    root_beta = math.inf
 
     try:
         _check_deadline(deadline)
-        ordered_moves = _ordered_moves(board)
+        root_entry = state.transposition_table.get(_position_key(board))
+        ordered_moves = _ordered_moves(
+            board,
+            tt_move=root_entry.best_move if root_entry else None,
+            history=state.history,
+        )
         if not ordered_moves:
             logger.error("No legal moves available at depth %s; returning no move.", depth)
             return SearchResult(
@@ -350,10 +372,11 @@ def _search_at_depth(
                 score, searched = _negamax(
                     board,
                     depth - 1,
-                    -math.inf,
-                    math.inf,
+                    -root_beta,
+                    -root_alpha,
                     deadline,
                     ply=1,
+                    state=state,
                 )
             finally:
                 board.pop()
@@ -364,6 +387,14 @@ def _search_at_depth(
             if score > best_score:
                 best_score = score
                 best_move = move
+            root_alpha = max(root_alpha, score)
+
+        state.transposition_table[_position_key(board)] = _TranspositionEntry(
+            depth=depth,
+            score=int(best_score),
+            bound="exact",
+            best_move=best_move,
+        )
 
         return SearchResult(
             move=best_move,
@@ -440,15 +471,37 @@ def _negamax(
     beta: float,
     deadline: float | None = None,
     ply: int = 0,
+    state: _SearchState | None = None,
 ) -> tuple[int, int]:
     _check_deadline(deadline)
     if depth == 0 or board.is_game_over():
         return _quiescence(board, alpha, beta, deadline, ply)
 
+    state = state or _SearchState.create(deadline)
+    position_key = _position_key(board)
+    entry = state.transposition_table.get(position_key)
+    original_alpha = alpha
+    original_beta = beta
+    if entry is not None and entry.depth >= depth:
+        if entry.bound == "exact":
+            return entry.score, 1
+        if entry.bound == "lower":
+            alpha = max(alpha, entry.score)
+        else:
+            beta = min(beta, entry.score)
+        if alpha >= beta:
+            return entry.score, 1
+
     best_score = -math.inf
+    best_move: chess.Move | None = None
     nodes = 0
 
-    for move in _ordered_moves(board):
+    for move in _ordered_moves(
+        board,
+        tt_move=entry.best_move if entry else None,
+        killer_moves=state.killer_moves.get(ply, ()),
+        history=state.history,
+    ):
         _check_deadline(deadline)
         board.push(move)
         try:
@@ -459,6 +512,7 @@ def _negamax(
                 -alpha,
                 deadline,
                 ply + 1,
+                state,
             )
         finally:
             board.pop()
@@ -466,12 +520,29 @@ def _negamax(
         score = -score
         nodes += searched
 
-        best_score = max(best_score, score)
+        if score > best_score:
+            best_score = score
+            best_move = move
         alpha = max(alpha, score)
         if alpha >= beta:
+            if not board.is_capture(move):
+                _record_cutoff(state, board, move, depth, ply)
             break
 
-    return int(best_score), nodes
+    score = int(best_score)
+    if score <= original_alpha:
+        bound: Literal["exact", "lower", "upper"] = "upper"
+    elif score >= original_beta:
+        bound = "lower"
+    else:
+        bound = "exact"
+    state.transposition_table[position_key] = _TranspositionEntry(
+        depth=depth,
+        score=score,
+        bound=bound,
+        best_move=best_move,
+    )
+    return score, nodes
 
 
 def _quiescence(
@@ -524,9 +595,61 @@ def _check_deadline(deadline: float | None) -> None:
         raise _SearchDeadlineExceeded
 
 
-def _ordered_moves(board: chess.Board) -> list[chess.Move]:
+def _position_key(board: chess.Board) -> tuple[int, int]:
+    """Hash the position and draw clock for the per-search transposition table."""
+    return chess.polyglot.zobrist_hash(board), board.halfmove_clock
+
+
+def _history_key(board: chess.Board, move: chess.Move) -> tuple[bool, int, int, int | None]:
+    return board.turn, move.from_square, move.to_square, move.promotion
+
+
+def _record_cutoff(
+    state: _SearchState,
+    board: chess.Board,
+    move: chess.Move,
+    depth: int,
+    ply: int,
+) -> None:
+    killers = state.killer_moves.setdefault(ply, [])
+    if move not in killers:
+        killers.insert(0, move)
+        del killers[2:]
+    key = _history_key(board, move)
+    state.history[key] = state.history.get(key, 0) + depth * depth
+
+
+def _log_search_result(
+    board: chess.Board,
+    result: SearchResult,
+    started: float,
+    enabled: bool,
+) -> None:
+    if enabled:
+        logger.info(
+            "Search depth=%s nodes=%s elapsed_ms=%.1f move=%s score=%s timed_out=%s fen=%s",
+            result.depth,
+            result.nodes,
+            (perf_counter() - started) * 1000,
+            result.move,
+            result.score,
+            result.timed_out,
+            board.fen(),
+        )
+
+
+def _ordered_moves(
+    board: chess.Board,
+    *,
+    tt_move: chess.Move | None = None,
+    killer_moves: tuple[chess.Move, ...] | list[chess.Move] = (),
+    history: dict[tuple[bool, int, int, int | None], int] | None = None,
+) -> list[chess.Move]:
     """Search forcing moves first so depth 3 stays responsive."""
     def move_priority(move: chess.Move) -> int:
+        if move == tt_move:
+            return 10_000_000
+
         priority = 0
         if board.is_capture(move):
             victim = board.piece_at(move.to_square)
@@ -535,8 +658,13 @@ def _ordered_moves(board: chess.Board) -> list[chess.Move]:
                 priority += 10 * PIECE_VALUES[victim.piece_type] - PIECE_VALUES[attacker.piece_type]
             else:
                 priority += 1_000
+            priority += 1_000_000
+        elif move in killer_moves:
+            priority += 500_000 - killer_moves.index(move)
         if move.promotion:
-            priority += PIECE_VALUES.get(move.promotion, 0)
+            priority += 750_000 + PIECE_VALUES.get(move.promotion, 0)
+        if history is not None:
+            priority += history.get(_history_key(board, move), 0)
         return priority
 
     return sorted(board.legal_moves, key=move_priority, reverse=True)

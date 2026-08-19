@@ -13,6 +13,7 @@ from engine import (
     get_evaluation,
 )
 import math
+import time
 import unittest
 from unittest.mock import patch
 
@@ -75,57 +76,41 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result.depth, 1)
         self.assertTrue(result.timed_out)
 
-    def test_depth_one_search_is_primary_emergency_fallback(self) -> None:
+    def test_timeout_does_not_start_an_unrestricted_fallback_search(self) -> None:
         board = chess.Board()
-        fallback = SearchResult(
-            move=chess.Move.from_uci("e2e4"),
-            score=25,
-            nodes=20,
-            depth=1,
-        )
 
         with patch(
             "engine._search_at_depth",
-            side_effect=[_SearchDeadlineExceeded, fallback],
+            side_effect=_SearchDeadlineExceeded,
         ) as search:
             result = choose_best_move(board, depth=3, time_limit_seconds=1)
 
-        self.assertEqual(result.move, fallback.move)
-        self.assertEqual(result.score, fallback.score)
-        self.assertEqual(result.nodes, fallback.nodes)
-        self.assertEqual(result.depth, 1)
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(result.depth, 0)
         self.assertTrue(result.timed_out)
-        self.assertEqual(search.call_count, 2)
-        self.assertIsNotNone(search.call_args_list[0].args[2])
-        self.assertEqual(len(search.call_args_list[1].args), 2)
+        search.assert_called_once()
 
-    def test_arbitrary_main_search_crash_uses_depth_one_fallback(self) -> None:
+    def test_arbitrary_main_search_crash_uses_safety_net(self) -> None:
         board = chess.Board()
-        fallback = SearchResult(
-            move=chess.Move.from_uci("e2e4"),
-            score=25,
-            nodes=20,
-            depth=1,
-        )
 
         with patch(
             "engine._search_at_depth",
-            side_effect=[RuntimeError("main failed"), fallback],
+            side_effect=RuntimeError("main failed"),
         ) as search:
             result = choose_best_move(board, depth=3, time_limit_seconds=1)
 
-        self.assertEqual(result.move, fallback.move)
-        self.assertEqual(result.depth, 1)
+        self.assertIn(result.move, board.legal_moves)
+        self.assertEqual(result.depth, 0)
         self.assertTrue(result.timed_out)
-        self.assertEqual(search.call_count, 2)
+        search.assert_called_once()
 
-    def test_ordered_move_is_only_used_when_depth_one_fallback_fails(self) -> None:
+    def test_safety_net_is_used_when_main_search_fails(self) -> None:
         board = chess.Board()
         original_fen = board.fen()
 
         with patch(
             "engine._search_at_depth",
-            side_effect=[_SearchDeadlineExceeded, RuntimeError("fallback failed")],
+            side_effect=_SearchDeadlineExceeded,
         ):
             result = choose_best_move(board, depth=3, time_limit_seconds=1)
 
@@ -152,6 +137,18 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(board.fen(), original_fen)
         self.assertEqual(result.depth, 1)
         self.assertTrue(result.timed_out)
+
+    def test_issue_20_position_respects_hard_time_limit(self) -> None:
+        board = chess.Board(
+            "r2qkb1r/ppp1pppp/2n1b3/3n4/2B5/2P2P2/PP1PN1PP/RNBQK2R b KQkq - 3 6"
+        )
+        started = time.perf_counter()
+
+        result = choose_best_move(board, depth=3, time_limit_seconds=0.1)
+        elapsed = time.perf_counter() - started
+
+        self.assertIn(result.move, board.legal_moves)
+        self.assertLess(elapsed, 0.25)
 
     def test_handoff_issue_20_position_returns_a_legal_move(self) -> None:
         board = chess.Board(
