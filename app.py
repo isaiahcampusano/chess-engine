@@ -126,6 +126,11 @@ def handle_move():
                 "depth": 0,
                 "timed_out": False,
                 "game_over": True,
+                "is_capture": False,
+                "is_check": False,
+                "is_castle": False,
+                "is_promotion": False,
+                "outcome": _outcome_payload(board.outcome()),
             }
         )
 
@@ -199,14 +204,30 @@ def handle_move():
         app.logger.critical("Unable to generate a legal move for FEN: %s", board.fen())
         return _error("The engine did not return a legal move.", 500)
 
+    move = result.move
+    move_flags = {
+        "is_capture": board.is_capture(move),
+        "is_check": board.gives_check(move),
+        "is_castle": board.is_castling(move),
+        "is_promotion": move.promotion is not None,
+    }
+    position_after_move = board.copy(stack=False)
+    position_after_move.push(move)
+    outcome = position_after_move.outcome()
+    game_over = outcome is not None
+    if game_over:
+        session["game_started"] = False
+
     return jsonify(
         {
-            "engine_move": result.move.uci(),
+            "engine_move": move.uci(),
             "score": result.score,
             "nodes": result.nodes,
             "depth": result.depth,
             "timed_out": result.timed_out,
-            "game_over": False,
+            "game_over": game_over,
+            **move_flags,
+            "outcome": _outcome_payload(outcome),
         }
     )
 
@@ -267,6 +288,21 @@ def handle_evaluation():
 
 def _error(message: str, status_code: int):
     return jsonify({"error": message}), status_code
+
+
+def _outcome_payload(outcome: chess.Outcome | None) -> dict[str, str | None] | None:
+    if outcome is None:
+        return None
+    return {
+        "winner": (
+            "white"
+            if outcome.winner is chess.WHITE
+            else "black"
+            if outcome.winner is chess.BLACK
+            else None
+        ),
+        "termination": outcome.termination.name.lower(),
+    }
 
 
 def _selected_bot_id() -> str:

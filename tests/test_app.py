@@ -80,6 +80,13 @@ class WebAppTests(unittest.TestCase):
             self.assertIn(b'data-bot="expert"', response.data)
             self.assertIn(b'id="botSelectionStatus"', response.data)
 
+    def test_home_page_includes_accessible_sound_toggle(self) -> None:
+        with self.client.get("/") as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'id="soundToggle"', response.data)
+            self.assertIn(b'aria-pressed="false"', response.data)
+            self.assertIn(b'id="soundLabel"', response.data)
+
     def test_bot_selection_defaults_to_expert(self) -> None:
         response = self.client.get("/select_bot")
 
@@ -122,10 +129,29 @@ class WebAppTests(unittest.TestCase):
             self.assertFalse(game_session["game_started"])
 
     def test_static_assets_are_served(self) -> None:
-        for path in ("/static/styles.css", "/static/app.js"):
+        for path in ("/static/styles.css", "/static/app.js", "/static/sound.js"):
             with self.subTest(path=path):
                 with self.client.get(path) as response:
                     self.assertEqual(response.status_code, 200)
+
+    def test_sound_assets_are_served(self) -> None:
+        sound_names = (
+            "move",
+            "capture",
+            "check",
+            "castle",
+            "promote",
+            "illegal",
+            "game-start",
+            "game-win",
+            "game-lose",
+            "game-draw",
+        )
+        for sound_name in sound_names:
+            with self.subTest(sound_name=sound_name):
+                response = self.client.get(f"/static/sounds/{sound_name}.ogg")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content_type, "audio/ogg")
 
     def test_move_endpoint_returns_engine_result(self) -> None:
         board = chess.Board()
@@ -150,6 +176,11 @@ class WebAppTests(unittest.TestCase):
                 "depth": 3,
                 "timed_out": False,
                 "game_over": False,
+                "is_capture": False,
+                "is_check": False,
+                "is_castle": False,
+                "is_promotion": False,
+                "outcome": None,
             },
         )
         searched_board = search.call_args.args[0]
@@ -248,7 +279,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("valid chess position", response.get_json()["error"])
 
     def test_game_over_position_returns_no_move(self) -> None:
-        checkmate_fen = "7k/5Q2/7K/8/8/8/8/8 b - - 0 1"
+        checkmate_fen = "7k/6Q1/6K1/8/8/8/8/8 b - - 0 1"
 
         response = self.client.post("/move", json={"fen": checkmate_fen})
 
@@ -262,7 +293,88 @@ class WebAppTests(unittest.TestCase):
                 "depth": 0,
                 "timed_out": False,
                 "game_over": True,
+                "is_capture": False,
+                "is_check": False,
+                "is_castle": False,
+                "is_promotion": False,
+                "outcome": {
+                    "winner": "white",
+                    "termination": "checkmate",
+                },
             },
+        )
+
+    def test_stalemate_position_returns_draw_outcome(self) -> None:
+        stalemate_fen = "7k/5Q2/7K/8/8/8/8/8 b - - 0 1"
+
+        response = self.client.post("/move", json={"fen": stalemate_fen})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["game_over"])
+        self.assertEqual(
+            response.get_json()["outcome"],
+            {"winner": None, "termination": "stalemate"},
+        )
+
+    def test_move_endpoint_reports_move_metadata(self) -> None:
+        cases = (
+            (
+                "is_capture",
+                "7k/8/8/8/3q4/8/3Q4/7K b - - 0 1",
+                "d4d2",
+            ),
+            (
+                "is_check",
+                "7k/8/8/8/8/8/8/R6K w - - 0 1",
+                "a1a8",
+            ),
+            (
+                "is_castle",
+                "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+                "e1g1",
+            ),
+            (
+                "is_promotion",
+                "8/P6k/8/8/8/8/7p/7K w - - 0 1",
+                "a7a8n",
+            ),
+        )
+
+        for flag, fen, move_uci in cases:
+            with self.subTest(flag=flag):
+                board = chess.Board(fen)
+                result = SearchResult(
+                    move=chess.Move.from_uci(move_uci),
+                    score=900,
+                    nodes=1,
+                    depth=3,
+                )
+
+                with patch("app.choose_best_move", return_value=result):
+                    response = self.client.post("/move", json={"fen": board.fen()})
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.get_json()[flag])
+
+    def test_engine_checkmate_move_includes_outcome(self) -> None:
+        board = chess.Board("7k/5Q2/6K1/8/8/8/8/8 w - - 0 1")
+        result = SearchResult(
+            move=chess.Move.from_uci("f7g7"),
+            score=100_000,
+            nodes=1,
+            depth=3,
+        )
+
+        with patch("app.choose_best_move", return_value=result):
+            response = self.client.post("/move", json={"fen": board.fen()})
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["is_check"])
+        self.assertTrue(payload["game_over"])
+        self.assertEqual(
+            payload["outcome"],
+            {"winner": "white", "termination": "checkmate"},
         )
 
     def test_engine_failure_uses_emergency_legal_move(self) -> None:

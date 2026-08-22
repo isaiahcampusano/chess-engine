@@ -22,9 +22,21 @@
             choose a destination.
           </p>
         </div>
-        <div id="depthBadge" class="depth-badge" aria-label="Expert engine search depth 3">
-          <span>Depth</span>
-          <strong id="depthBadgeValue">3</strong>
+        <div class="hero-controls">
+          <button
+            id="soundToggle"
+            class="sound-toggle"
+            type="button"
+            aria-pressed="false"
+            title="Mute sound"
+          >
+            <span id="soundIcon" aria-hidden="true">🔊</span>
+            <span id="soundLabel" class="sr-only">Mute sound</span>
+          </button>
+          <div id="depthBadge" class="depth-badge" aria-label="Expert engine search depth 3">
+            <span>Depth</span>
+            <strong id="depthBadgeValue">3</strong>
+          </div>
         </div>
       </header>
 

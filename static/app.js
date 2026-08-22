@@ -1,4 +1,11 @@
 import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.4.0/+esm";
+import {
+  isMuted,
+  playMoveSound,
+  playOutcomeSound,
+  playSound,
+  toggleMuted,
+} from "./sound.js";
 
 const PIECE_THEME =
   "https://cdn.jsdelivr.net/gh/oakmac/chessboardjs@v1.0.0/website/img/chesspieces/wikipedia/{piece}.png";
@@ -6,9 +13,13 @@ const CLIENT_TIMEOUT_MS = 12_000;
 const ANALYSIS_TIMEOUT_MS = 28_000;
 const EVALUATION_TIMEOUT_MS = 4_000;
 const EVALUATION_RANGE_CP = 500;
-const PROMOTION_TEST_FEN = "7k/P7/8/8/8/8/8/7K w - - 0 1";
-const PROMOTION_CAPTURE_TEST_FEN = "1r5k/P7/8/8/8/8/8/7K w - - 0 1";
+const PROMOTION_TEST_FEN = "8/P6k/8/8/8/8/7p/7K w - - 0 1";
+const PROMOTION_CAPTURE_TEST_FEN = "1r6/P6k/8/8/8/8/7p/7K w - - 0 1";
 const ANALYSIS_TEST_FEN = "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1";
+const CHECK_SOUND_TEST_FEN = "7k/8/8/8/8/8/8/R6K w - - 0 1";
+const CASTLE_SOUND_TEST_FEN = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+const LOSS_SOUND_TEST_FEN = "8/8/8/8/8/5kq1/8/R6K w - - 0 1";
+const DRAW_SOUND_TEST_FEN = "7k/P7/8/8/8/8/8/7K w - - 0 1";
 const PROMOTION_PIECES = new Set(["q", "r", "b", "n"]);
 const BOARD_FILES = "abcdefgh";
 const PIECE_NAMES = {
@@ -81,9 +92,15 @@ const localTestName = ["127.0.0.1", "localhost"].includes(window.location.hostna
 const promotionTestFen = {
   promotion: PROMOTION_TEST_FEN,
   "promotion-capture": PROMOTION_CAPTURE_TEST_FEN,
+  draw: DRAW_SOUND_TEST_FEN,
 }[localTestName] || null;
 const analysisTestFen = localTestName === "analysis" ? ANALYSIS_TEST_FEN : null;
-const initialTestFen = promotionTestFen || analysisTestFen;
+const soundTestFen = {
+  check: CHECK_SOUND_TEST_FEN,
+  castle: CASTLE_SOUND_TEST_FEN,
+  loss: LOSS_SOUND_TEST_FEN,
+}[localTestName] || null;
+const initialTestFen = promotionTestFen || analysisTestFen || soundTestFen;
 
 const elements = {
   analysisBadge: document.querySelector("#analysisBadge"),
@@ -144,6 +161,9 @@ const elements = {
   blackAccuracy: document.querySelector("#blackAccuracy"),
   blackCounts: document.querySelector("#blackCounts"),
   selectedEvaluation: document.querySelector("#selectedEvaluation"),
+  soundIcon: document.querySelector("#soundIcon"),
+  soundLabel: document.querySelector("#soundLabel"),
+  soundToggle: document.querySelector("#soundToggle"),
 };
 
 let game = createInitialGame();
@@ -160,7 +180,17 @@ let analysisController = null;
 let pendingPromotion = null;
 let selectedSquare = null;
 let selectedMoves = [];
-let focusedSquare = promotionTestFen ? "a7" : analysisTestFen ? "f7" : "e2";
+let focusedSquare = promotionTestFen
+  ? "a7"
+  : analysisTestFen
+  ? "f7"
+  : localTestName === "check"
+  ? "a1"
+  : localTestName === "castle"
+  ? "e1"
+  : localTestName === "loss"
+  ? "a1"
+  : "e2";
 let lastMove = null;
 let interactionMessage = "";
 let engineMoveAnnouncement = "";
@@ -213,7 +243,8 @@ function initialize() {
   elements.botButtons.forEach((button) => {
     button.addEventListener("click", selectBot);
   });
-  elements.newGameButton.addEventListener("click", startNewGame);
+  elements.newGameButton.addEventListener("click", handleNewGame);
+  elements.soundToggle.addEventListener("click", handleSoundToggle);
   elements.reviewGameButton.addEventListener("click", requestGameAnalysis);
   elements.closeAnalysisButton.addEventListener("click", closeGameAnalysis);
   elements.previousAnalysisButton.addEventListener("click", () => {
@@ -245,8 +276,26 @@ function initialize() {
   window.chessAppReady = true;
   elements.dependencyAlert.hidden = true;
   elements.dependencyAlert.classList.remove("is-error");
+  renderSoundToggle();
   render();
   startNewGame();
+}
+
+function handleNewGame() {
+  playSound("game_start");
+  startNewGame();
+}
+
+function handleSoundToggle() {
+  renderSoundToggle(toggleMuted());
+}
+
+function renderSoundToggle(muted = isMuted()) {
+  const label = muted ? "Turn sound on" : "Mute sound";
+  elements.soundToggle.setAttribute("aria-pressed", String(muted));
+  elements.soundToggle.title = label;
+  elements.soundIcon.textContent = muted ? "🔇" : "🔊";
+  elements.soundLabel.textContent = label;
 }
 
 async function selectBot(event) {
@@ -362,6 +411,7 @@ function onDrop(source, target) {
 
   if (isPromotionAttempt(source, target)) {
     if (!isLegalPromotionTarget(source, target)) {
+      playSound("illegal");
       interactionMessage = `${target} is not a legal destination for that pawn.`;
       render();
       return "snapback";
@@ -375,6 +425,7 @@ function onDrop(source, target) {
     return undefined;
   }
 
+  playSound("illegal");
   interactionMessage = `${target} is not a legal destination for the selected piece.`;
   render();
   return "snapback";
@@ -398,6 +449,7 @@ function playPlayerMove(moveOptions) {
   lastError = "";
   engineMoveAnnouncement = "";
   gameActive = !game.isGameOver();
+  playMoveFeedback(move);
   renderBotSelector();
   renderBotLockMessage();
   syncBoard();
@@ -415,6 +467,28 @@ function playActiveMove(moveOptions) {
   return planningState.isPlanning
     ? playPlannedMove(moveOptions)
     : playPlayerMove(moveOptions);
+}
+
+function playMoveFeedback(move, metadata = {}) {
+  if (metadata.game_over || game.isGameOver()) {
+    playOutcomeSound(metadata.outcome || currentOutcome());
+    return;
+  }
+
+  const moveFlags = typeof move.flags === "string" ? move.flags : "";
+  playMoveSound({
+    is_check: metadata.is_check ?? game.isCheck(),
+    is_capture: metadata.is_capture ?? Boolean(move.captured),
+    is_castle: metadata.is_castle ?? /[kq]/.test(moveFlags),
+    is_promotion: metadata.is_promotion ?? Boolean(move.promotion),
+  });
+}
+
+function currentOutcome() {
+  if (!game.isGameOver() || game.isDraw()) {
+    return { winner: null };
+  }
+  return { winner: game.turn() === "w" ? "black" : "white" };
 }
 
 function playPlannedMove(moveOptions) {
@@ -478,6 +552,7 @@ function choosePromotion(event) {
   elements.promotionDialog.close();
 
   if (!playActiveMove(moveOptions)) {
+    playSound("illegal");
     lastError = "That promotion is no longer legal. Please try the move again.";
     syncBoard();
     render();
@@ -605,6 +680,7 @@ function activateSquare(square) {
   }
 
   interactionMessage = `${square} is not a legal destination for the selected piece.`;
+  playSound("illegal");
   render();
 }
 
@@ -918,8 +994,11 @@ async function requestEngineMove() {
       return;
     }
 
-    if (data.game_over || !data.engine_move) {
+    if (!data.engine_move) {
       gameActive = false;
+      if (data.game_over) {
+        playOutcomeSound(data.outcome || currentOutcome());
+      }
       renderBotLockMessage();
       render();
       return;
@@ -939,6 +1018,7 @@ async function requestEngineMove() {
     };
     engineMoveAnnouncement = `Engine played ${completedEngineMove.san}.`;
     gameActive = !game.isGameOver();
+    playMoveFeedback(completedEngineMove, data);
     renderBotLockMessage();
     syncBoard();
     lastEngineStats = {
@@ -1279,7 +1359,17 @@ async function startNewGame() {
   planningState.predictor = null;
   game = createInitialGame();
   gameStartFen = game.fen();
-  focusedSquare = promotionTestFen ? "a7" : analysisTestFen ? "f7" : "e2";
+  focusedSquare = promotionTestFen
+    ? "a7"
+    : analysisTestFen
+    ? "f7"
+    : localTestName === "check"
+    ? "a1"
+    : localTestName === "castle"
+    ? "e1"
+    : localTestName === "loss"
+    ? "a1"
+    : "e2";
   syncBoard(false);
   render();
   requestLiveEvaluation();
