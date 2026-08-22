@@ -157,7 +157,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(search.call_args.kwargs["depth"], 3)
         self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 8.0)
 
-    def test_move_endpoint_uses_selected_bot_depth(self) -> None:
+    def test_move_endpoint_uses_selected_bot_skill(self) -> None:
         board = chess.Board()
         result = SearchResult(
             move=chess.Move.from_uci("e2e4"),
@@ -167,11 +167,11 @@ class WebAppTests(unittest.TestCase):
         )
         self.client.post("/select_bot", json={"bot_id": "novice"})
 
-        with patch("app.choose_best_move", return_value=result) as search:
+        with patch("app.choose_move_with_skill", return_value=result) as search:
             response = self.client.post("/move", json={"fen": board.fen()})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(search.call_args.kwargs["depth"], 1)
+        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.35)
 
     def test_active_game_bot_stays_frozen_when_preference_changes(self) -> None:
         board = chess.Board()
@@ -184,7 +184,7 @@ class WebAppTests(unittest.TestCase):
         self.client.post("/select_bot", json={"bot_id": "novice"})
         self.client.post("/new_game")
 
-        with patch("app.choose_best_move", return_value=novice_result) as search:
+        with patch("app.choose_move_with_skill", return_value=novice_result) as search:
             first_move = self.client.post("/move", json={"fen": board.fen()})
             selection = self.client.post("/select_bot", json={"bot_id": "expert"})
             second_move = self.client.post("/move", json={"fen": board.fen()})
@@ -193,7 +193,10 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(second_move.status_code, 200)
         self.assertEqual(selection.get_json()["status"], "preference_saved")
         self.assertEqual(selection.get_json()["current_game_bot"], "novice")
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [1, 1])
+        self.assertEqual(
+            [call.kwargs["blunder_chance"] for call in search.call_args_list],
+            [0.35, 0.35],
+        )
 
     def test_saved_preference_applies_to_the_next_new_game(self) -> None:
         board = chess.Board()
@@ -322,13 +325,16 @@ class WebAppTests(unittest.TestCase):
     def test_novice_failure_skips_duplicate_depth_one_retry(self) -> None:
         self.client.post("/select_bot", json={"bot_id": "novice"})
 
-        with patch("app.choose_best_move", side_effect=RuntimeError("boom")) as search:
+        with patch(
+            "app.choose_move_with_skill",
+            side_effect=RuntimeError("boom"),
+        ) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["depth"], 0)
         search.assert_called_once()
-        self.assertEqual(search.call_args.kwargs["depth"], 1)
+        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.35)
 
     def test_timed_out_search_returns_best_available_move(self) -> None:
         result = SearchResult(

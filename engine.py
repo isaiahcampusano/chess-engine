@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Literal
@@ -462,6 +463,40 @@ def _score_move_for_side_to_move(board: chess.Board, move: chess.Move) -> int:
     finally:
         board.pop()
     return white_score if root_turn == chess.WHITE else -white_score
+
+
+def choose_move_with_skill(
+    board: chess.Board,
+    *,
+    blunder_chance: float = 0.35,
+    rng: random.Random | None = None,
+) -> SearchResult:
+    """Pick a move with a chance of playing something worse than best.
+
+    Uses a single-ply static evaluation per legal move (no quiescence or deeper
+    search), then may sample uniformly from the non-best moves.
+    """
+    if board.is_game_over():
+        return SearchResult(move=None, score=evaluate_board(board), nodes=0, depth=0)
+
+    rng = rng or random
+    scored = [
+        (move, _score_move_for_side_to_move(board, move))
+        for move in board.legal_moves
+    ]
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+
+    chosen_move, chosen_score = scored[0]
+    if len(scored) > 1 and rng.random() < blunder_chance:
+        chosen_move, chosen_score = rng.choice(scored[1:])
+
+    return SearchResult(
+        move=chosen_move,
+        score=chosen_score,
+        nodes=len(scored),
+        depth=1,
+        timed_out=False,
+    )
 
 
 def _negamax(

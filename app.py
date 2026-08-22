@@ -8,13 +8,18 @@ import chess
 from flask import Flask, jsonify, request, session
 
 from analysis import MAX_GAME_PLIES, analyse_game
-from engine import SearchResult, choose_best_move, get_evaluation
+from engine import (
+    SearchResult,
+    choose_best_move,
+    choose_move_with_skill,
+    get_evaluation,
+)
 
 
 ENGINE_TIME_LIMIT_SECONDS = 8.0
 BOTS = {
-    "novice": {"depth": 1, "label": "Novice"},
-    "expert": {"depth": 3, "label": "Expert"},
+    "novice": {"depth": 1, "label": "Novice", "blunder_chance": 0.35},
+    "expert": {"depth": 3, "label": "Expert", "blunder_chance": 0.0},
 }
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -126,25 +131,33 @@ def handle_move():
 
     bot_id = _active_game_bot_id()
     session["game_started"] = True
-    max_depth = BOTS[bot_id]["depth"]
+    bot_config = BOTS[bot_id]
+    max_depth = bot_config["depth"]
+    blunder_chance = bot_config.get("blunder_chance", 0.0)
     result: SearchResult | None = None
 
     search_depths = [max_depth]
     if max_depth != 1:
         search_depths.append(1)
 
-    for search_depth in search_depths:
+    for index, search_depth in enumerate(search_depths):
         try:
             app.logger.info(
                 "Attempting engine search at depth %s for FEN %s.",
                 search_depth,
                 board.fen(),
             )
-            candidate = choose_best_move(
-                board,
-                depth=search_depth,
-                time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
-            )
+            if index == 0 and blunder_chance > 0:
+                candidate = choose_move_with_skill(
+                    board,
+                    blunder_chance=blunder_chance,
+                )
+            else:
+                candidate = choose_best_move(
+                    board,
+                    depth=search_depth,
+                    time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
+                )
         except Exception:
             app.logger.exception(
                 "Engine crashed at depth %s for FEN %s; retrying.",
