@@ -104,10 +104,10 @@ class BookTests(unittest.TestCase):
         book = self.book()
         rng = Mock()
         rng.choices.return_value = [chess.Move.from_uci("e2e4")]
-        rng.random.side_effect = [0.099, 0.9]
+        rng.random.side_effect = [0.95, 0.9]
         result = choose_move_with_skill(self.board, opening_book=book, rng=rng)
         self.assertEqual(result.depth, 1)
-        self.assertEqual(result.nodes, 20)
+        self.assertGreaterEqual(result.nodes, 20)
         self.board.push_uci("a2a3")
         result = choose_best_move(self.board, depth=1, opening_book=book)
         self.assertEqual(result.depth, 1)
@@ -204,7 +204,7 @@ class BuilderTests(unittest.TestCase):
 
 
 class GameplayBookTests(unittest.TestCase):
-    def test_all_browser_bots_use_the_shared_book(self):
+    def test_browser_bots_follow_their_shared_book_policies(self):
         import app as web_app
         for bot_id in web_app.BOTS:
             with self.subTest(bot_id=bot_id):
@@ -212,12 +212,16 @@ class GameplayBookTests(unittest.TestCase):
                 page = client.get("/").data.decode()
                 self.assertRegex(page, rf'data-bot="{bot_id}"\s+data-depth="{web_app.BOTS[bot_id]["depth"]}"')
                 client.post("/select_bot", json={"bot_id": bot_id})
-                with patch("engine.random.random", return_value=0.5):
+                with patch("engine.random.random", return_value=0.4):
                     response = client.post("/move", json={"fen": chess.STARTING_FEN})
                 data = response.get_json()
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(data["nodes"], 0)
-                self.assertEqual(data["depth"], 0)
+                if bot_id == "rookie":
+                    self.assertGreater(data["nodes"], 0)
+                    self.assertEqual(data["depth"], 1)
+                else:
+                    self.assertEqual(data["nodes"], 0)
+                    self.assertEqual(data["depth"], 0)
                 self.assertFalse(data["timed_out"])
                 self.assertIn(chess.Move.from_uci(data["engine_move"]), chess.Board().legal_moves)
         self.assertIs(web_app.OPENING_BOOK, books.get_default_opening_book())

@@ -9,36 +9,74 @@ https://isaiahcampusano-chess-engine.onrender.com/
 
 ## Opponents
 
-- **Rookie Randy** is a cheerful novice who thinks out loud and occasionally blunders.
-- **Sandbag Sam** is a cocky novice with big talk and the same forgiving playing strength.
-- **The Professor** is a dry, clinical expert who searches up to four plies deep.
-- **Martin** is an expert wisecracker who also searches up to four plies deep.
+Each bot has its own playing profile, defined in `bot_config.py` and shared by
+personality metadata and browser move selection:
 
-Each character reacts to moves with offline, curated commentary. Generated placeholder avatars
-are included under `static/avatars/` and can be replaced with final artwork later. After a match,
-the final reaction remains visible while you review the board or open the opponent picker again.
+| Opponent | Maximum search depth | Blunder chance | Opening book | Move time limit |
+| --- | ---: | ---: | --- | ---: |
+| Rookie Randy | 1 | 15% | Never | 1 second |
+| Sandbag Sam | 2 | 25% | 50% probability | 2 seconds |
+| The Professor | 5 | 0% | Always when available | 8 seconds |
+| Martin | 3 | 8% | 50% probability | 3 seconds |
+
+Randy is a cheerful beginner. Sam calculates further but takes more risks.
+The Professor is the strongest, most consistent opponent. Martin combines
+shorter calculation with occasional mistakes and wisecracks. These settings
+produce different behavior; they are not calibrated Elo ratings.
+
+Each character reacts with offline, curated commentary. Placeholder avatars
+live under `static/avatars/`. The final reaction remains visible during review.
 
 ## Opening play and search
 
-Browser opponents and the terminal opponent share a bundled weighted opening book.
-Experts always take an available book move. Rookie Randy and Sandbag Sam bypass the
-book on 10% of book hits, using their existing one-ply move picker and 35% blunder
-chance. Once a position leaves the book, each opponent resumes its usual search.
-Different games can follow different opening lines; the book does not learn or
-download anything during play.
+Book policy is applied before search and blunders. If the policy permits a book
+move and one exists, the existing frequency-weighted selection is retained.
+A book miss resumes search. Randy never consults the book; Sam and Martin make
+an independent 50% book decision on each turn. Missing or corrupt book data
+logs a warning and permits normal play. The default book is loaded once per
+process from the module directory, independently of the working directory.
 
-Professor and Martin search up to depth 4 after leaving the book, using the existing
-eight-second browser deadline and the deepest completed iteration. The live
-evaluation bar stays at depth 3; game review and evaluation never use the book.
-Terminal `--depth` still defaults to 3 and honors explicit values.
+After leaving the book, bots use iterative deepening under one per-move
+deadline. A timeout returns the deepest fully completed iteration, including
+its complete move rankings when needed. The browser does not restart at depth
+1. If even depth 1 cannot finish, a legal emergency move reports `depth=0` and
+`timed_out=True`. Configured depths are maximums, not guaranteed on every move.
 
-The selectors accept `opening_book=None` (the default, pure search) and an optional
-`rng=random.Random(seed)` for reproducible opening choices. They still return a
-`SearchResult`. Book moves report `depth=0`, `nodes=0`, `timed_out=False`, and a
-static score after the move from the mover's perspective, rather than a searched
-score. HTTP response fields are unchanged. Missing or corrupt book data logs a
-warning and permits normal play. The default book is loaded once per process from
-the module directory, independently of the working directory.
+When an error is triggered, 70% of the time the bot chooses uniformly among the
+top three alternatives to the best move (or all alternatives if fewer exist).
+The remaining 30% samples all legal moves, which can happen to select the best
+move. Rankings use full-window root searches from the last completed depth;
+ordinary turns retain the faster best-move search. A zero blunder probability
+performs no blunder random draw. Equal-scoring alternatives can still be chosen.
+
+Evaluation keeps material and piece-square tables and adds small terms for
+legal mobility, pawn structure, bishop pairs, rook files, and king safety.
+Weights are centralized in `engine.POSITIONAL_WEIGHTS`, in centipawns. King
+safety scales with remaining non-pawn material. These terms add computation;
+the per-move deadlines still bound search, and completed depth can vary.
+
+`choose_best_move()` retains its public API. `choose_move_with_skill()` retains
+`blunder_chance`, `rng`, and `opening_book`, and additionally accepts `depth`,
+`time_limit_seconds`, `book_policy`, and `book_chance`. Its direct-call defaults
+remain depth 1, 35% blunders, and a 90% book probability; browser bots explicitly
+pass every profile setting. Skill search now uses negamax with quiescence,
+rather than the previous static one-ply ranking.
+
+Both selectors return `SearchResult`. Book moves report `depth=0`, `nodes=0`,
+`timed_out=False`, and a static score after the move from the mover's perspective.
+HTTP response fields are unchanged. `opening_book=None` (the default) means pure
+search. Supply `rng=random.Random(seed)` for reproducible choices, using no time
+limit when reproducibility must also be independent of machine speed.
+
+The terminal opponent keeps its shared book and `--depth` behavior (default 3).
+The live evaluation bar stays at depth 3; game review and evaluation never use
+the book.
+
+Run all tests from the repository directory:
+
+```sh
+python -m unittest discover -s tests
+```
 
 ## Rebuilding the book
 

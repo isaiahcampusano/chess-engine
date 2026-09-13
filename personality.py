@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from bot_config import BOT_CONFIGS
+
 
 @dataclass(frozen=True)
 class Personality:
@@ -35,8 +37,8 @@ PERSONALITIES: dict[str, Personality] = {
         id="rookie",
         label="Rookie Randy",
         tier="novice",
-        depth=1,
-        blunder_chance=0.35,
+        depth=BOT_CONFIGS["rookie"]["depth"],
+        blunder_chance=BOT_CONFIGS["rookie"]["blunder_chance"],
         avatar="rookie.png",
         lines={
             "game_start": [
@@ -125,8 +127,8 @@ PERSONALITIES: dict[str, Personality] = {
         id="hustler",
         label="Sandbag Sam",
         tier="novice",
-        depth=1,
-        blunder_chance=0.35,
+        depth=BOT_CONFIGS["hustler"]["depth"],
+        blunder_chance=BOT_CONFIGS["hustler"]["blunder_chance"],
         avatar="hustler.png",
         lines={
             "game_start": [
@@ -215,8 +217,8 @@ PERSONALITIES: dict[str, Personality] = {
         id="professor",
         label="The Professor",
         tier="expert",
-        depth=4,
-        blunder_chance=0.0,
+        depth=BOT_CONFIGS["professor"]["depth"],
+        blunder_chance=BOT_CONFIGS["professor"]["blunder_chance"],
         avatar="professor.png",
         lines={
             "game_start": [
@@ -297,8 +299,8 @@ PERSONALITIES: dict[str, Personality] = {
         id="martin",
         label="Martin",
         tier="expert",
-        depth=4,
-        blunder_chance=0.0,
+        depth=BOT_CONFIGS["martin"]["depth"],
+        blunder_chance=BOT_CONFIGS["martin"]["blunder_chance"],
         avatar="martin.png",
         lines={
             "game_start": [

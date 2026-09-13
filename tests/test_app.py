@@ -139,10 +139,10 @@ class WebAppTests(unittest.TestCase):
 
     def test_all_four_personalities_keep_the_expected_skill_settings(self) -> None:
         expected = {
-            "rookie": (1, 0.35),
-            "hustler": (1, 0.35),
-            "professor": (4, 0.0),
-            "martin": (4, 0.0),
+            "rookie": (1, 0.15),
+            "hustler": (2, 0.25),
+            "professor": (5, 0.0),
+            "martin": (3, 0.08),
         }
         self.assertEqual(set(web_app.BOTS), set(expected))
         for bot_id, (depth, blunder_chance) in expected.items():
@@ -244,7 +244,7 @@ class WebAppTests(unittest.TestCase):
             depth=3,
         )
 
-        with patch("app.choose_best_move", return_value=result) as search:
+        with patch("app.choose_move_with_skill", return_value=result) as search:
             response = self.client.post("/move", json={"fen": board.fen()})
 
         self.assertEqual(response.status_code, 200)
@@ -269,7 +269,7 @@ class WebAppTests(unittest.TestCase):
         )
         searched_board = search.call_args.args[0]
         self.assertEqual(searched_board.fen(), board.fen())
-        self.assertEqual(search.call_args.kwargs["depth"], 4)
+        self.assertEqual(search.call_args.kwargs["depth"], 5)
         self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 8.0)
 
     def test_player_blunder_commentary_uses_static_evaluations(self) -> None:
@@ -281,7 +281,7 @@ class WebAppTests(unittest.TestCase):
 
         with (
             patch("app.evaluate_board", side_effect=[-100, -100]),
-            patch("app.choose_best_move", return_value=result),
+            patch("app.choose_move_with_skill", return_value=result),
             patch("app._pick_commentary", return_value="That loses material.") as speak,
         ):
             response = self.client.post("/move", json={"fen": board.fen()})
@@ -313,7 +313,7 @@ class WebAppTests(unittest.TestCase):
 
         with (
             patch("app.evaluate_board", return_value=0),
-            patch("app.choose_best_move", return_value=result),
+            patch("app.choose_move_with_skill", return_value=result),
             patch("app._pick_commentary", return_value="The position speaks for itself.") as speak,
         ):
             first = self.client.post("/move", json={"fen": board.fen()})
@@ -335,7 +335,7 @@ class WebAppTests(unittest.TestCase):
             game_session["commentary_eval"] = 1_000
 
         with (
-            patch("app.choose_best_move", return_value=result),
+            patch("app.choose_move_with_skill", return_value=result),
             patch("app._pick_commentary", return_value="Class dismissed.") as speak,
         ):
             response = self.client.post("/move", json={"fen": board.fen()})
@@ -358,7 +358,7 @@ class WebAppTests(unittest.TestCase):
             response = self.client.post("/move", json={"fen": board.fen()})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.35)
+        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.15)
 
     def test_selected_opponent_is_locked_for_the_entire_game(self) -> None:
         board = chess.Board()
@@ -382,7 +382,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("locked", selection.get_json()["error"])
         self.assertEqual(
             [call.kwargs["blunder_chance"] for call in search.call_args_list],
-            [0.35, 0.35],
+            [0.15, 0.15],
         )
 
     def test_new_game_requires_a_fresh_conscious_choice(self) -> None:
@@ -396,13 +396,13 @@ class WebAppTests(unittest.TestCase):
         self.client.post("/new_game")
         blocked_move = self.client.post("/move", json={"fen": board.fen()})
         selection = self.client.post("/select_bot", json={"bot_id": "professor"})
-        with patch("app.choose_best_move", return_value=result) as search:
+        with patch("app.choose_move_with_skill", return_value=result) as search:
             move_response = self.client.post("/move", json={"fen": board.fen()})
 
         self.assertEqual(blocked_move.status_code, 409)
         self.assertEqual(selection.status_code, 200)
         self.assertEqual(move_response.status_code, 200)
-        self.assertEqual(search.call_args.kwargs["depth"], 4)
+        self.assertEqual(search.call_args.kwargs["depth"], 5)
 
     def test_end_game_releases_the_locked_opponent(self) -> None:
         response = self.client.post(
@@ -536,7 +536,7 @@ class WebAppTests(unittest.TestCase):
                     depth=3,
                 )
 
-                with patch("app.choose_best_move", return_value=result):
+                with patch("app.choose_move_with_skill", return_value=result):
                     response = self.client.post("/move", json={"fen": board.fen()})
 
                 self.assertEqual(response.status_code, 200)
@@ -551,7 +551,7 @@ class WebAppTests(unittest.TestCase):
             depth=3,
         )
 
-        with patch("app.choose_best_move", return_value=result):
+        with patch("app.choose_move_with_skill", return_value=result):
             response = self.client.post("/move", json={"fen": board.fen()})
 
         payload = response.get_json()
@@ -566,7 +566,7 @@ class WebAppTests(unittest.TestCase):
     def test_engine_failure_uses_emergency_legal_move(self) -> None:
         board = chess.Board()
         with patch(
-            "app.choose_best_move",
+            "app.choose_move_with_skill",
             side_effect=RuntimeError("boom"),
         ) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
@@ -576,10 +576,10 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(chess.Move.from_uci(payload["engine_move"]), board.legal_moves)
         self.assertEqual(payload["depth"], 0)
         self.assertTrue(payload["timed_out"])
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [4, 1])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [5])
         self.assertTrue(
             all(
-                call.kwargs["time_limit_seconds"] == web_app.ENGINE_TIME_LIMIT_SECONDS
+                call.kwargs["time_limit_seconds"] == web_app.BOTS["professor"]["time_limit_seconds"]
                 for call in search.call_args_list
             )
         )
@@ -590,7 +590,7 @@ class WebAppTests(unittest.TestCase):
             score=0,
             nodes=1,
         )
-        with patch("app.choose_best_move", return_value=result) as search:
+        with patch("app.choose_move_with_skill", return_value=result) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
         payload = response.get_json()
@@ -601,24 +601,15 @@ class WebAppTests(unittest.TestCase):
         )
         self.assertEqual(payload["depth"], 0)
         self.assertTrue(payload["timed_out"])
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [4, 1])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [5])
 
-    def test_move_endpoint_retries_at_depth_one_after_none_result(self) -> None:
-        fallback = SearchResult(
-            move=chess.Move.from_uci("e2e4"),
-            score=15,
-            nodes=20,
-            depth=1,
-            timed_out=True,
-        )
-
-        with patch("app.choose_best_move", side_effect=[None, fallback]) as search:
+    def test_move_endpoint_does_not_restart_search_after_none_result(self) -> None:
+        with patch("app.choose_move_with_skill", return_value=None) as search:
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
-
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["engine_move"], "e2e4")
-        self.assertEqual(response.get_json()["depth"], 1)
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [4, 1])
+        self.assertIn(chess.Move.from_uci(response.get_json()["engine_move"]), chess.Board().legal_moves)
+        self.assertEqual(response.get_json()["depth"], 0)
+        search.assert_called_once()
 
     def test_rookie_failure_skips_duplicate_depth_one_retry(self) -> None:
         self.client.post("/new_game")
@@ -633,7 +624,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["depth"], 0)
         search.assert_called_once()
-        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.35)
+        self.assertEqual(search.call_args.kwargs["blunder_chance"], 0.15)
 
     def test_timed_out_search_returns_best_available_move(self) -> None:
         result = SearchResult(
@@ -643,7 +634,7 @@ class WebAppTests(unittest.TestCase):
             depth=1,
             timed_out=True,
         )
-        with patch("app.choose_best_move", return_value=result):
+        with patch("app.choose_move_with_skill", return_value=result):
             response = self.client.post("/move", json={"fen": chess.STARTING_FEN})
 
         self.assertEqual(response.status_code, 200)

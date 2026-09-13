@@ -73,7 +73,7 @@ class EngineTests(unittest.TestCase):
 
         self.assertIn(result.move, board.legal_moves)
         self.assertEqual(board.fen(), original_fen)
-        self.assertEqual(result.depth, 1)
+        self.assertEqual(result.depth, 0)
         self.assertTrue(result.timed_out)
 
     def test_timeout_does_not_start_an_unrestricted_fallback_search(self) -> None:
@@ -135,7 +135,7 @@ class EngineTests(unittest.TestCase):
 
         self.assertIn(result.move, board.legal_moves)
         self.assertEqual(board.fen(), original_fen)
-        self.assertEqual(result.depth, 1)
+        self.assertEqual(result.depth, 0)
         self.assertTrue(result.timed_out)
 
     def test_issue_20_position_respects_hard_time_limit(self) -> None:

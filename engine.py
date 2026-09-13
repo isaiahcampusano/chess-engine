@@ -28,6 +28,71 @@ PIECE_VALUES = {
 
 CHECKMATE_SCORE = 100_000
 
+POSITIONAL_WEIGHTS = {
+    "mobility": 2,
+    "bishop_pair": 30,
+    "doubled_pawn": -10,
+    "isolated_pawn": -10,
+    "passed_pawn": 15,
+    "rook_open_file": 20,
+    "rook_semi_open_file": 10,
+    "pawn_shield": 5,
+    "king_exposed_file": -10,
+}
+INITIAL_NON_PAWN_MATERIAL = 2 * (2 * 320 + 2 * 330 + 2 * 500 + 900)
+
+
+def _positional_terms(board: chess.Board, color: chess.Color, phase: float) -> dict[str, int]:
+    """Small features for one side; never change the caller's board or history."""
+    weights = POSITIONAL_WEIGHTS
+    pawns = board.pieces_mask(chess.PAWN, color)
+    enemy_pawns = board.pieces_mask(chess.PAWN, not color)
+    files = [(pawns & mask).bit_count() for mask in chess.BB_FILES]
+    pawn_score = sum(max(0, count - 1) for count in files) * weights["doubled_pawn"]
+    for square in chess.scan_forward(pawns):
+        file = chess.square_file(square)
+        neighbors = ((chess.BB_FILES[file - 1] if file else 0) |
+                     (chess.BB_FILES[file + 1] if file < 7 else 0))
+        if not pawns & neighbors:
+            pawn_score += weights["isolated_pawn"]
+        rank = chess.square_rank(square)
+        ahead = ((chess.BB_ALL << (8 * (rank + 1))) & chess.BB_ALL
+                 if color == chess.WHITE else (1 << (8 * rank)) - 1)
+        if not enemy_pawns & ahead & (neighbors | chess.BB_FILES[file]):
+            pawn_score += weights["passed_pawn"]
+
+    rook_score = 0
+    for square in board.pieces(chess.ROOK, color):
+        mask = chess.BB_FILES[chess.square_file(square)]
+        if not pawns & mask:
+            rook_score += weights["rook_semi_open_file"] if enemy_pawns & mask else weights["rook_open_file"]
+
+    king_score = 0
+    king = board.king(color)
+    if king is not None:
+        front_rank = chess.square_rank(king) + (1 if color == chess.WHITE else -1)
+        for file in range(max(0, chess.square_file(king) - 1), min(7, chess.square_file(king) + 1) + 1):
+            if not files[file]:
+                king_score += weights["king_exposed_file"]
+            if 0 <= front_rank < 8 and pawns & chess.BB_SQUARES[chess.square(file, front_rank)]:
+                king_score += weights["pawn_shield"]
+
+    position = board.copy(stack=False)
+    if position.turn != color:
+        position.turn = color
+        position.ep_square = None  # En passant belongs only to the actual mover.
+    # A hypothetical opposite turn must never count a capture of the king.
+    targets = chess.BB_ALL & ~board.pieces_mask(chess.KING, not color)
+    mobility = sum(1 for _ in position.generate_legal_moves(to_mask=targets))
+    return {
+        "mobility": weights["mobility"] * mobility,
+        "pawns": pawn_score,
+        "rooks": rook_score,
+        "bishop_pair": weights["bishop_pair"] if len(board.pieces(chess.BISHOP, color)) >= 2 else 0,
+        "king_safety": round(king_score * phase),
+    }
+
+
 def _build_table(rows: list[list[int]]) -> list[int]:
     return [value for row in rows for value in row]
 
@@ -166,6 +231,14 @@ def evaluate_board(board: chess.Board) -> int:
         if piece is not None:
             score += _piece_square_score(piece, square)
 
+    non_pawn_material = sum(
+        PIECE_VALUES[piece_type] * (board.pieces_mask(piece_type, chess.WHITE) |
+                                    board.pieces_mask(piece_type, chess.BLACK)).bit_count()
+        for piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+    )
+    phase = min(1.0, non_pawn_material / INITIAL_NON_PAWN_MATERIAL)
+    score += sum(_positional_terms(board, chess.WHITE, phase).values())
+    score -= sum(_positional_terms(board, chess.BLACK, phase).values())
     return score
 
 
@@ -208,7 +281,24 @@ def choose_best_move(
     rng: random.Random | None = None,
 ) -> SearchResult:
     """Pick the best legal move, optionally keeping the search within a deadline."""
-    search_started = perf_counter()
+    return _choose_search(
+        board, depth, time_limit_seconds=time_limit_seconds, debug=debug,
+        opening_book=opening_book, rng=rng,
+    )
+
+
+def _choose_search(
+    board: chess.Board,
+    depth: int,
+    *,
+    time_limit_seconds: float | None = None,
+    debug: bool = False,
+    opening_book: OpeningBook | None = None,
+    rng: random.Random | None = None,
+    root_scores: list[tuple[chess.Move, int]] | None = None,
+    started: float | None = None,
+) -> SearchResult:
+    search_started = perf_counter() if started is None else started
     if depth < 1:
         raise ValueError("depth must be at least 1")
     if time_limit_seconds is not None and time_limit_seconds <= 0:
@@ -233,7 +323,8 @@ def choose_best_move(
     if time_limit_seconds is None:
         state = _SearchState.create(deadline=None)
         try:
-            result = _search_at_depth(board, depth, state=state)
+            options = {} if root_scores is None else {"root_scores": root_scores}
+            result = _search_at_depth(board, depth, state=state, **options)
         except Exception:
             logger.exception(
                 "Unrestricted depth-%s search crashed for FEN %s.",
@@ -256,12 +347,15 @@ def choose_best_move(
         deadline = search_started + time_limit_seconds
         state = _SearchState.create(deadline)
         for current_depth in range(1, depth + 1):
+            iteration_scores: list[tuple[chess.Move, int]] = []
+            options = {} if root_scores is None else {"root_scores": iteration_scores}
             try:
                 result = _search_at_depth(
                     board,
                     current_depth,
                     deadline,
                     state=state,
+                    **options,
                 )
             except _SearchDeadlineExceeded:
                 timed_out = True
@@ -281,6 +375,8 @@ def choose_best_move(
                 interrupted_result = result
                 break
 
+            if root_scores is not None:
+                root_scores[:] = iteration_scores
             completed_result = SearchResult(
                 move=result.move,
                 score=result.score,
@@ -313,7 +409,7 @@ def choose_best_move(
             move=interrupted_result.move,
             score=interrupted_result.score,
             nodes=completed_nodes,
-            depth=interrupted_result.depth,
+            depth=0,
             timed_out=True,
         )
         _log_search_result(board, final_result, search_started, debug)
@@ -349,6 +445,7 @@ def _search_at_depth(
     deadline: float | None = None,
     *,
     state: _SearchState | None = None,
+    root_scores: list[tuple[chess.Move, int]] | None = None,
 ) -> SearchResult:
     best_move: chess.Move | None = None
     best_score = -math.inf
@@ -356,6 +453,7 @@ def _search_at_depth(
     state = state or _SearchState.create(deadline)
     root_alpha = -math.inf
     root_beta = math.inf
+    scored: list[tuple[chess.Move, int]] = []
 
     try:
         _check_deadline(deadline)
@@ -383,7 +481,7 @@ def _search_at_depth(
                     board,
                     depth - 1,
                     -root_beta,
-                    -root_alpha,
+                    math.inf if root_scores is not None else -root_alpha,
                     deadline,
                     ply=1,
                     state=state,
@@ -393,12 +491,17 @@ def _search_at_depth(
 
             score = -score
             nodes += searched + 1
+            if root_scores is not None:
+                scored.append((move, int(score)))
 
             if score > best_score:
                 best_score = score
                 best_move = move
             root_alpha = max(root_alpha, score)
 
+        _check_deadline(deadline)
+        if root_scores is not None:
+            root_scores[:] = sorted(scored, key=lambda pair: pair[1], reverse=True)
         state.transposition_table[_position_key(board)] = _TranspositionEntry(
             depth=depth,
             score=int(best_score),
@@ -480,37 +583,60 @@ def choose_move_with_skill(
     blunder_chance: float = 0.35,
     rng: random.Random | None = None,
     opening_book: OpeningBook | None = None,
+    depth: int = 1,
+    time_limit_seconds: float | None = None,
+    book_policy: Literal["never", "sometimes", "always"] = "sometimes",
+    book_chance: float = 0.9,
 ) -> SearchResult:
-    """Pick a move with a chance of playing something worse than best.
+    """Search at the requested strength, optionally choosing a weighted error.
 
-    Uses the book with 90% probability when available. Otherwise uses a
-    single-ply static evaluation and may sample from the non-best moves.
+    Book decisions precede blunders. The legacy default book probability is
+    retained for direct callers; browser bots always supply their own profile.
+    A severe blunder samples every legal move, so it may happen to pick the best.
     """
+    started = perf_counter()
+    if depth < 1:
+        raise ValueError("depth must be at least 1")
+    if time_limit_seconds is not None and time_limit_seconds <= 0:
+        raise ValueError("time_limit_seconds must be positive")
+    if not 0 <= blunder_chance <= 1 or not 0 <= book_chance <= 1:
+        raise ValueError("probabilities must be between 0 and 1")
+    if book_policy not in ("never", "sometimes", "always"):
+        raise ValueError("unknown book policy")
     if board.is_game_over():
         return SearchResult(move=None, score=evaluate_board(board), nodes=0, depth=0)
 
     rng = rng or random
-    if opening_book is not None:
-        book_move = opening_book.get_move(board, rng=rng)
-        if book_move is not None and rng.random() >= 0.10:
-            return SearchResult(book_move, _score_move_for_side_to_move(board, book_move), nodes=0)
-    scored = [
-        (move, _score_move_for_side_to_move(board, move))
-        for move in board.legal_moves
-    ]
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-
-    chosen_move, chosen_score = scored[0]
-    if len(scored) > 1 and rng.random() < blunder_chance:
-        chosen_move, chosen_score = rng.choice(scored[1:])
-
-    return SearchResult(
-        move=chosen_move,
-        score=chosen_score,
-        nodes=len(scored),
-        depth=1,
-        timed_out=False,
+    use_book = opening_book is not None and (
+        book_policy == "always" or (
+            book_policy == "sometimes" and
+            (book_chance == 1 or (book_chance > 0 and rng.random() < book_chance))
+        )
     )
+    if use_book:
+        book_move = opening_book.get_move(board, rng=rng)
+        if book_move is not None:
+            return SearchResult(book_move, _score_move_for_side_to_move(board, book_move), nodes=0)
+
+    # Rank all root moves only on turns that need an error. Other turns retain
+    # the faster alpha-beta best-move path, with no random draw at probability 0.
+    blunder = blunder_chance > 0 and rng.random() < blunder_chance
+    scored: list[tuple[chess.Move, int]] = []
+    result = _choose_search(
+        board, depth, time_limit_seconds=time_limit_seconds, started=started,
+        root_scores=scored if blunder else None,
+    )
+    if not blunder or not scored:
+        return result
+    alternatives = [pair for pair in scored if pair[0] != result.move]
+    if not alternatives:
+        return result
+    if rng.random() < 0.70:
+        move, score = rng.choice(alternatives[:3])
+    else:
+        move = rng.choice(list(board.legal_moves))
+        score = dict(scored)[move]
+    return SearchResult(move, score, result.nodes, result.depth, result.timed_out)
 
 
 def _negamax(

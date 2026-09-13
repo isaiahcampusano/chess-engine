@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import chess
 
-from engine import _score_move_for_side_to_move, choose_move_with_skill
+from engine import choose_best_move, choose_move_with_skill
 
 
 class SkillLevelTests(unittest.TestCase):
@@ -19,10 +19,7 @@ class SkillLevelTests(unittest.TestCase):
 
     @staticmethod
     def top_scored_move(board: chess.Board) -> chess.Move:
-        return max(
-            board.legal_moves,
-            key=lambda move: _score_move_for_side_to_move(board, move),
-        )
+        return choose_best_move(board, depth=1).move
 
     def test_forced_blunder_can_choose_a_non_best_move(self) -> None:
         rng = random.Random(7)

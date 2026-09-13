@@ -10,16 +10,15 @@ from flask import Flask, jsonify, request, session
 from analysis import MAX_GAME_PLIES, analyse_game
 from engine import (
     SearchResult,
-    choose_best_move,
     choose_move_with_skill,
     evaluate_board,
     get_evaluation,
 )
+from bot_config import BOT_CONFIGS
 from personality import PERSONALITIES, Personality, get_personality
 from opening_book import get_default_opening_book
 
 
-ENGINE_TIME_LIMIT_SECONDS = 8.0
 LIVE_EVALUATION_DEPTH = 3
 OPENING_BOOK = get_default_opening_book()
 PLAYER_BLUNDER_THRESHOLD_CP = 150
@@ -28,9 +27,8 @@ POSITION_COMMENTARY_THRESHOLD_CP = 150
 POSITION_COMMENTARY_INTERVAL = 2
 BOTS = {
     personality_id: {
-        "depth": personality.depth,
+        **BOT_CONFIGS[personality_id],
         "label": personality.label,
-        "blunder_chance": personality.blunder_chance,
     }
     for personality_id, personality in PERSONALITIES.items()
 }
@@ -209,9 +207,6 @@ def handle_move():
         )
 
     session["game_started"] = True
-    bot_config = BOTS[bot_id]
-    max_depth = bot_config["depth"]
-    blunder_chance = bot_config.get("blunder_chance", 0.0)
     result: SearchResult | None = None
     position_before_bot_eval = evaluate_board(board)
     player_trigger = _player_move_trigger(
@@ -220,49 +215,17 @@ def handle_move():
         not bot_color,
     )
 
-    search_depths = [max_depth]
-    if max_depth != 1:
-        search_depths.append(1)
-
-    for index, search_depth in enumerate(search_depths):
-        try:
-            app.logger.info(
-                "Attempting engine search at depth %s for FEN %s.",
-                search_depth,
-                board.fen(),
-            )
-            if index == 0 and blunder_chance > 0:
-                candidate = choose_move_with_skill(
-                    board,
-                    blunder_chance=blunder_chance,
-                    opening_book=OPENING_BOOK,
-                )
-            else:
-                candidate = choose_best_move(
-                    board,
-                    depth=search_depth,
-                    time_limit_seconds=ENGINE_TIME_LIMIT_SECONDS,
-                    opening_book=OPENING_BOOK if index == 0 else None,
-                )
-        except Exception:
-            app.logger.exception(
-                "Engine crashed at depth %s for FEN %s; retrying.",
-                search_depth,
-                board.fen(),
-            )
-            continue
-
+    try:
+        candidate = choose_move_with_skill(
+            board, **BOT_CONFIGS[bot_id], opening_book=OPENING_BOOK,
+        )
         candidate_move = getattr(candidate, "move", None)
         if candidate_move is not None and candidate_move in board.legal_moves:
             result = candidate
-            app.logger.info("Engine returned a legal move at depth %s.", search_depth)
-            break
-
-        app.logger.warning(
-            "Engine returned no legal move at depth %s for FEN %s; retrying.",
-            search_depth,
-            board.fen(),
-        )
+        else:
+            app.logger.error("Engine returned no legal move for FEN %s.", board.fen())
+    except Exception:
+        app.logger.exception("Engine failed for FEN %s.", board.fen())
 
     if result is None:
         legal_moves = list(board.legal_moves)
