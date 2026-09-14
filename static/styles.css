@@ -49,6 +49,7 @@ html {
 }
 
 body {
+  position: relative;
   min-height: 100vh;
   margin: 0;
   color: var(--text);
@@ -56,6 +57,21 @@ body {
     radial-gradient(circle at 12% 12%, var(--page-glow), transparent 34rem),
     radial-gradient(circle at 88% 88%, var(--accent-glow), transparent 30rem),
     var(--page);
+  font-feature-settings: "ss01" 1, "cv11" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 72px 72px;
+  content: "";
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+  pointer-events: none;
 }
 
 button {
@@ -63,6 +79,8 @@ button {
 }
 
 .app-shell {
+  position: relative;
+  z-index: 1;
   width: min(1180px, calc(100% - 40px));
   margin: 0 auto;
   padding: 56px 0 28px;
@@ -73,7 +91,9 @@ button {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 34px;
+  margin-bottom: 30px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line);
 }
 
 .eyebrow,
@@ -100,6 +120,7 @@ h1 {
   font-weight: 500;
   letter-spacing: -0.045em;
   line-height: 0.96;
+  text-wrap: balance;
 }
 
 .hero-copy {
@@ -108,6 +129,7 @@ h1 {
   color: var(--muted);
   font-size: 1rem;
   line-height: 1.6;
+  text-wrap: pretty;
 }
 
 .hero-controls {
@@ -605,8 +627,11 @@ h1 {
   padding: clamp(8px, 1.3vw, 13px);
   border: 1px solid var(--line);
   border-radius: 24px;
-  background: #202b24;
-  box-shadow: var(--shadow);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--panel-raised) 92%, var(--accent)), var(--panel-solid));
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.025),
+    var(--shadow);
 }
 
 .chessboard {
@@ -756,6 +781,15 @@ h1 {
   background: var(--panel);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.15);
   backdrop-filter: blur(16px);
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.status-card:hover,
+.history-card:hover,
+.planning-card:hover,
+.metrics:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  box-shadow: 0 22px 58px rgba(0, 0, 0, 0.2);
 }
 
 .status-card,
@@ -1264,6 +1298,7 @@ h1 {
 }
 
 .button.primary {
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 16%, transparent);
   background: var(--accent);
   color: #17200f;
 }
@@ -1277,6 +1312,11 @@ h1 {
   border: 1px solid var(--line);
   background: var(--panel-raised);
   color: var(--text);
+}
+
+.button.secondary:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--panel-raised) 88%, var(--accent));
 }
 
 .full-width {
@@ -1409,6 +1449,7 @@ footer {
   margin-top: 38px;
   color: #67746a;
   font-size: 0.75rem;
+  letter-spacing: 0.02em;
 }
 
 @keyframes pulse {
