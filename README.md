@@ -1,5 +1,32 @@
 # Chess Engine
 
+## Sessions and deployment
+
+The Render blueprint generates `SECRET_KEY` once when it is missing and preserves
+the existing value on subsequent syncs ([Render documentation](https://render.com/docs/blueprint-spec#generating-random-secrets)).
+For an existing service not managed by the blueprint, configure a securely generated
+random `SECRET_KEY` once in the service's Environment settings. Preserve that value
+across restarts, deployments, and workers; do not commit it or print it in logs.
+Changing the key invalidates existing session cookies. Local development can run
+without it, but logs a warning and loses sessions whenever the process restarts.
+
+If an open game's session is lost, choose **Reconnect to [opponent]** to preserve
+the board and move history and resume against the same opponent. **New game** starts
+over. Conflicting or removed opponents require a new game. This does not restore a
+board after a page reload. The live service's environment must be checked separately
+before attributing a production error to its signing key.
+
+Browser recovery checks use Playwright with a local server:
+
+```sh
+python -m flask --app app run --port 5055
+# In another terminal, with the playwright npm package and Chromium installed:
+node --test tests/session_recovery.cjs
+```
+
+Set `CHESS_TEST_URL` to use another local port. These checks simulate session loss
+and network failures; engine replies are deterministic to isolate recovery behavior.
+
 [play now](https://isaiahcampusano-chess-engine.onrender.com/)
 
 <img width="862" height="786" alt="image" src="https://github.com/user-attachments/assets/fd68e33a-c9d0-4903-b2a0-636ed743e651" />

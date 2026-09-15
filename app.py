@@ -35,6 +35,11 @@ BOTS = {
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
+if not os.environ.get("SECRET_KEY"):
+    app.logger.warning(
+        "SECRET_KEY is unset; sessions will be lost on restart. "
+        "Configure a persistent SECRET_KEY for deployment."
+    )
 
 
 @app.get("/")
@@ -162,7 +167,11 @@ def handle_move():
     """Return the engine's best move for a supplied FEN position."""
     _reset_stale_opponent()
     if not session.get("opponent_selected", False):
-        return _error("Choose an opponent before starting the game.", 409)
+        return jsonify({
+            "error": "Choose an opponent before starting the game.",
+            "code": "opponent_selection_required",
+            "needs_selection": True,
+        }), 409
 
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
