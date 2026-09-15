@@ -53,6 +53,7 @@ def select_bot():
     """Return the current opponent or commit a choice for the next game."""
     _reset_stale_opponent()
     opening_commentary = None
+    opening_trigger = None
     if request.method == "POST":
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
@@ -79,7 +80,7 @@ def select_bot():
         session["commentary_eval"] = evaluate_board(chess.Board())
         session["commentary_tick"] = 0
         session.pop("last_commentary", None)
-        opening_commentary = _pick_commentary(bot_id, "game_start")
+        opening_commentary, opening_trigger = _resolve_commentary_payload(bot_id, "game_start")
 
     if not session.get("opponent_selected", False):
         return jsonify(
@@ -92,6 +93,7 @@ def select_bot():
                 "game_active": False,
                 "needs_selection": True,
                 "commentary": None,
+                "commentary_trigger": None,
                 "avatar": None,
                 "idle_lines": [],
             }
@@ -110,6 +112,7 @@ def select_bot():
             "needs_selection": False,
             "tier": personality.tier,
             "commentary": opening_commentary,
+            "commentary_trigger": opening_trigger,
             "avatar": personality.avatar,
             "idle_lines": personality.lines.get("idle", []),
         }
@@ -149,7 +152,7 @@ def end_game():
     bot_id = _valid_session_bot_id()
     outcome = board.outcome()
     trigger = _terminal_commentary_trigger(outcome, chess.BLACK)
-    commentary = _pick_commentary(bot_id, trigger) if bot_id and trigger else None
+    commentary, commentary_trigger = _resolve_commentary_payload(bot_id, trigger) if bot_id and trigger else (None, None)
     avatar = get_personality(bot_id).avatar if bot_id else None
     _clear_opponent_selection()
     return jsonify(
@@ -157,6 +160,7 @@ def end_game():
             "status": "ok",
             "needs_selection": True,
             "commentary": commentary,
+            "commentary_trigger": commentary_trigger,
             "avatar": avatar,
         }
     )
@@ -195,7 +199,7 @@ def handle_move():
     if board.is_game_over():
         outcome = board.outcome()
         trigger = _terminal_commentary_trigger(outcome, bot_color)
-        commentary = _pick_commentary(bot_id, trigger) if trigger else None
+        commentary, commentary_trigger = _resolve_commentary_payload(bot_id, trigger) if trigger else (None, None)
         _clear_opponent_selection()
         return jsonify(
             {
@@ -211,6 +215,7 @@ def handle_move():
                 "is_promotion": False,
                 "outcome": _outcome_payload(outcome),
                 "commentary": commentary,
+                "commentary_trigger": commentary_trigger,
                 "avatar": personality.avatar,
             }
         )
@@ -293,7 +298,7 @@ def handle_move():
         elif result.score < -POSITION_COMMENTARY_THRESHOLD_CP:
             trigger = "bot_losing"
 
-    commentary = _pick_commentary(bot_id, trigger) if trigger else None
+    commentary, commentary_trigger = _resolve_commentary_payload(bot_id, trigger) if trigger else (None, None)
     if game_over:
         _clear_opponent_selection()
 
@@ -308,6 +313,7 @@ def handle_move():
             **move_flags,
             "outcome": _outcome_payload(outcome),
             "commentary": commentary,
+            "commentary_trigger": commentary_trigger,
             "avatar": personality.avatar,
         }
     )
@@ -419,14 +425,29 @@ def _reset_stale_opponent() -> None:
         _clear_opponent_selection()
 
 
-def _pick_commentary(bot_id: str, trigger: str) -> str | None:
+def _resolve_commentary_payload(bot_id: str, trigger: str | None) -> tuple[str | None, str | None]:
+    result = _pick_commentary(bot_id, trigger) if trigger else (None, None)
+    if isinstance(result, str):
+        return result, trigger
+    if isinstance(result, tuple):
+        if len(result) == 2:
+            return result
+        if not result:
+            return None, trigger
+        return result[0], trigger
+    return None, trigger
+
+
+def _pick_commentary(bot_id: str, trigger: str | None) -> tuple[str | None, str | None]:
+    if trigger is None:
+        return None, None
     line = get_personality(bot_id).say(
         trigger,
         previous=session.get("last_commentary"),
     )
     if line is not None:
         session["last_commentary"] = line
-    return line
+    return line, trigger
 
 
 def _score_for_color(score: int, color: chess.Color) -> int:

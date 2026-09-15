@@ -1,4 +1,5 @@
 import { Chess } from "./vendor/chess.js/chess.js";
+import { AnimationDirector } from "./animation.js";
 import {
   isMuted,
   playMoveSound,
@@ -294,6 +295,7 @@ const elements = {
   themeSelect: document.querySelector("#themeSelect"),
   themeStatus: document.querySelector("#themeStatus"),
 };
+const animationDirector = new AnimationDirector(elements.botCommentary);
 
 let game = createInitialGame();
 let gameStartFen = game.fen();
@@ -559,7 +561,7 @@ function renderSelectedBot(data) {
   elements.opponentAvatar.src = `/static/avatars/${encodeURIComponent(selectedBot.avatar)}`;
   elements.opponentAvatar.alt = `${selectedBot.label} avatar`;
   elements.opponentAvatar.hidden = false;
-  updateCommentary(data.commentary);
+  updateCommentary(data.commentary, data.commentary_trigger || "default");
 }
 
 function renderBotSelector() {
@@ -575,17 +577,17 @@ function renderBotLockMessage() {
   }
 }
 
-function updateCommentary(line) {
+function updateCommentary(line, trigger = "default") {
   if (typeof line !== "string" || !line.trim()) {
     return;
   }
   currentCommentary = line.trim();
-  elements.botCommentary.textContent = currentCommentary;
-  elements.botCommentary.hidden = false;
+  animationDirector.showCommentary(currentCommentary, trigger);
 }
 
 function clearCommentary() {
   currentCommentary = "";
+  animationDirector.skip();
   elements.botCommentary.textContent = "";
   elements.botCommentary.hidden = true;
 }
@@ -594,7 +596,7 @@ function showNextIdleCommentary() {
   const alternatives = selectedBot.idleLines.filter((line) => line !== currentCommentary);
   const pool = alternatives.length > 0 ? alternatives : selectedBot.idleLines;
   if (pool.length > 0) {
-    updateCommentary(pool[Math.floor(Math.random() * pool.length)]);
+    updateCommentary(pool[Math.floor(Math.random() * pool.length)], "idle");
   }
 }
 
@@ -1291,7 +1293,7 @@ async function requestEngineMove() {
 
     stopThinkingCommentary();
     if (typeof data.commentary === "string" && data.commentary.trim()) {
-      updateCommentary(data.commentary);
+      updateCommentary(data.commentary, data.commentary_trigger || "default");
     } else {
       restoreCommentary(commentaryBeforeThinking);
     }
