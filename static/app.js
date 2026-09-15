@@ -275,6 +275,7 @@ const elements = {
   planningSequence: document.querySelector("#planningSequence"),
   previousAnalysisButton: document.querySelector("#previousAnalysisButton"),
   retryButton: document.querySelector("#retryButton"),
+  reconnectButton: document.querySelector("#reconnectButton"),
   reviewGameButton: document.querySelector("#reviewGameButton"),
   reviewFromSelectionButton: document.querySelector("#reviewFromSelectionButton"),
   searchNotice: document.querySelector("#searchNotice"),
@@ -301,6 +302,10 @@ let isThinking = false;
 let lastError = "";
 let lastEngineStats = null;
 let activeRequestId = 0;
+let opponentRecoveryRequired = false;
+let recoveryRequestId = 0;
+let recoveryController = null;
+let recoveryInFlight = false;
 let pendingController = null;
 let evaluationController = null;
 let evaluationRequestId = 0;
@@ -403,6 +408,7 @@ function initialize() {
   elements.clearPlanButton.addEventListener("click", clearPlanningSequence);
   elements.copyPlanButton.addEventListener("click", copyPlanningSequence);
   elements.retryButton.addEventListener("click", requestEngineMove);
+  elements.reconnectButton.addEventListener("click", reconnectOpponent);
   elements.cancelPromotionButton.addEventListener("click", cancelPromotion);
   elements.promotionDialog.addEventListener("cancel", cancelPromotion);
   elements.promotionDialog.addEventListener("keydown", handlePromotionShortcut);
@@ -480,7 +486,7 @@ function renderSoundToggle(muted = isMuted()) {
 }
 
 async function selectBot(event) {
-  if (opponentSelected) {
+  if (opponentSelected || botRequestInFlight || opponentRecoveryRequired) {
     return;
   }
 
@@ -1228,6 +1234,9 @@ function syncBoard(useAnimation = true) {
 
 async function requestEngineMove() {
   if (
+    !opponentSelected ||
+    opponentRecoveryRequired ||
+    isStartingGame ||
     analysisState.isOpen ||
     analysisState.isLoading ||
     planningState.isPlanning ||
@@ -1263,12 +1272,21 @@ async function requestEngineMove() {
     const [response] = await Promise.all([fetchPromise, delayPromise]);
 
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(data.error || "The engine request failed.");
-    }
-
     if (requestId !== activeRequestId) {
       return;
+    }
+    if (response.status === 409 && data.code === "opponent_selection_required") {
+      opponentRecoveryRequired = true;
+      opponentSelected = false;
+      gameActive = false;
+      elements.lockedPill.hidden = true;
+      elements.botSelectionStatus.textContent = "Reconnect to continue this game, or choose New game.";
+      lastError = "Your opponent connection was lost. Your board is safe. Reconnect to continue, or choose New game.";
+      restoreCommentary(commentaryBeforeThinking);
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(data.error || "The engine request failed.");
     }
 
     stopThinkingCommentary();
@@ -1328,12 +1346,73 @@ async function requestEngineMove() {
     restoreCommentary(commentaryBeforeThinking);
   } finally {
     window.clearTimeout(timer);
-    stopThinkingCommentary();
     if (requestId === activeRequestId) {
+      stopThinkingCommentary();
       isThinking = false;
       pendingController = null;
       render();
     }
+  }
+}
+
+async function reconnectOpponent() {
+  if (!opponentRecoveryRequired || recoveryInFlight || isStartingGame || isThinking) {
+    return;
+  }
+  const requestId = ++recoveryRequestId;
+  const botId = selectedBot.id;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), CLIENT_TIMEOUT_MS);
+  recoveryController = controller;
+  recoveryInFlight = true;
+  lastError = "";
+  render();
+  let reconnected = false;
+  try {
+    let response = await fetch("/select_bot", { signal: controller.signal });
+    let data = await response.json().catch(() => ({}));
+    if (requestId !== recoveryRequestId) return;
+    if (!response.ok) throw new Error(data.error || "Could not check your opponent. Try reconnecting again.");
+    if (data.needs_selection || !data.selected) {
+      response = await fetch("/select_bot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot_id: botId }),
+        signal: controller.signal,
+      });
+      data = await response.json().catch(() => ({}));
+      if (requestId !== recoveryRequestId) return;
+      if (!response.ok) {
+        throw new Error(response.status === 400
+          ? "This opponent is no longer available. Choose New game to select another opponent."
+          : `${data.error || "Could not reconnect."} Your board is safe. Try reconnecting or choose New game.`);
+      }
+    }
+    if (data.selected !== botId || data.needs_selection) {
+      throw new Error("The server has a different opponent selected. Your board is safe. Choose New game to start another match.");
+    }
+    opponentRecoveryRequired = false;
+    opponentSelected = true;
+    gameActive = !game.isGameOver();
+    // Keep the current position, history, and commentary; selection normally resets them.
+    elements.lockedPill.hidden = false;
+    renderBotLockMessage();
+    reconnected = true;
+  } catch (error) {
+    if (requestId !== recoveryRequestId) return;
+    lastError = error.name === "AbortError"
+      ? "Reconnecting timed out. Your board is safe. Try reconnecting again."
+      : error.message || "Could not reconnect. Your board is safe. Try again.";
+  } finally {
+    window.clearTimeout(timer);
+    if (requestId === recoveryRequestId) {
+      recoveryController = null;
+      recoveryInFlight = false;
+      render();
+    }
+  }
+  if (reconnected && requestId === recoveryRequestId) {
+    await requestEngineMove();
   }
 }
 
@@ -1350,6 +1429,7 @@ function parseUciMove(uci) {
 }
 
 function togglePlanningMode() {
+  if (opponentRecoveryRequired) return;
   if (planningState.isPlanning) {
     exitPlanningMode();
     return;
@@ -1667,9 +1747,15 @@ async function releaseCompletedGame() {
 }
 
 async function startNewGame() {
+  if (isStartingGame) return;
+  recoveryRequestId += 1;
+  recoveryController?.abort();
+  recoveryController = null;
+  recoveryInFlight = false;
   activeRequestId += 1;
   pendingController?.abort();
   pendingController = null;
+  isThinking = false;
   stopThinkingCommentary();
   evaluationRequestId += 1;
   evaluationController?.abort();
@@ -1710,6 +1796,7 @@ async function startNewGame() {
 }
 
 function resetLocalGameState() {
+  opponentRecoveryRequired = false;
   activeRequestId += 1;
   pendingController?.abort();
   pendingController = null;
@@ -1872,11 +1959,17 @@ function render() {
   renderCapturedPieces();
 
   const canRetry =
+    !opponentRecoveryRequired &&
     !planningState.isPlanning &&
     Boolean(lastError) &&
     !game.isGameOver() &&
     game.turn() === "b";
   elements.retryButton.hidden = !canRetry;
+  elements.reconnectButton.hidden = !opponentRecoveryRequired;
+  elements.reconnectButton.disabled = recoveryInFlight || isStartingGame || isThinking;
+  elements.reconnectButton.textContent = recoveryInFlight
+    ? `Reconnecting to ${selectedBot.label}…`
+    : `Reconnect to ${selectedBot.label}`;
   elements.errorBox.hidden = planningState.isPlanning || !lastError;
   elements.errorBox.textContent = lastError;
   const searchMessage = getSearchNotice();
@@ -1887,6 +1980,7 @@ function render() {
   );
   elements.thinkingPill.hidden = !isThinking;
   elements.planMovesButton.disabled =
+    opponentRecoveryRequired ||
     analysisState.isOpen ||
     analysisState.isLoading ||
     isThinking ||
@@ -2132,6 +2226,11 @@ function getSearchNotice() {
 }
 
 function renderStatus() {
+  if (opponentRecoveryRequired) {
+    elements.statusHeading.textContent = recoveryInFlight ? "Reconnecting opponent" : "Opponent disconnected";
+    elements.statusDescription.textContent = "Your board and moves are safe. Reconnect to continue, or choose New game.";
+    return;
+  }
   if (pendingPromotion) {
     elements.statusHeading.textContent = "Choose a promotion";
     elements.statusDescription.textContent =
