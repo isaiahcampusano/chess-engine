@@ -514,6 +514,77 @@ h1 {
   line-height: 1;
 }
 
+.banter-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.banter-form[hidden] {
+  display: none;
+}
+
+.banter-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: clamp(0.8rem, 1.8vw, 0.9rem);
+}
+
+.banter-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.banter-input:disabled {
+  opacity: 0.6;
+}
+
+.banter-send {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: clamp(0.8rem, 1.8vw, 0.9rem);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.banter-send:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.banter-send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.banter-thinking {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: clamp(0.78rem, 1.7vw, 0.88rem);
+  font-style: italic;
+}
+
+.banter-thinking[hidden] {
+  display: none;
+}
+
+.banter-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: clamp(0.78rem, 1.7vw, 0.88rem);
+}
+
+.banter-status[hidden] {
+  display: none;
+}
+
 .captured-pieces:empty::after {
   color: var(--muted);
   content: "No captures yet";

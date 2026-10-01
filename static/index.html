@@ -82,6 +82,20 @@
                 </span>
               </div>
               <p id="botCommentary" class="speech-bubble" role="status" aria-live="polite" hidden></p>
+              <form id="banterForm" class="banter-form" hidden>
+                <input
+                  id="banterInput"
+                  class="banter-input"
+                  type="text"
+                  maxlength="280"
+                  placeholder="Reply…"
+                  aria-label="Reply to your opponent"
+                  autocomplete="off"
+                >
+                <button id="banterSend" class="banter-send" type="submit">Send</button>
+              </form>
+              <p id="banterThinking" class="banter-thinking" role="status" hidden>Thinking…</p>
+              <p id="banterStatus" class="banter-status" role="status" aria-live="polite" hidden></p>
               <div
                 id="capturedPieces"
                 class="captured-pieces"

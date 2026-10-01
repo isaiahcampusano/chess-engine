@@ -237,6 +237,11 @@ const elements = {
   board: document.querySelector("#myBoard"),
   boardOverlay: document.querySelector("#boardOverlay"),
   botCommentary: document.querySelector("#botCommentary"),
+  banterForm: document.querySelector("#banterForm"),
+  banterInput: document.querySelector("#banterInput"),
+  banterSend: document.querySelector("#banterSend"),
+  banterThinking: document.querySelector("#banterThinking"),
+  banterStatus: document.querySelector("#banterStatus"),
   botButtons: document.querySelectorAll("[data-bot]"),
   botSelectorHeading: document.querySelector("#botSelectorHeading"),
   botSelectionStatus: document.querySelector("#botSelectionStatus"),
@@ -340,6 +345,8 @@ let selectedBot = {
 };
 let opponentSelected = false;
 let gameActive = false;
+let banterExchangeIndex = null;
+let banterBusy = false;
 let isStartingGame = false;
 let botRequestInFlight = false;
 let currentCommentary = "";
@@ -411,6 +418,7 @@ function initialize() {
   elements.copyPlanButton.addEventListener("click", copyPlanningSequence);
   elements.retryButton.addEventListener("click", requestEngineMove);
   elements.reconnectButton.addEventListener("click", reconnectOpponent);
+  elements.banterForm.addEventListener("submit", submitBanter);
   elements.cancelPromotionButton.addEventListener("click", cancelPromotion);
   elements.promotionDialog.addEventListener("cancel", cancelPromotion);
   elements.promotionDialog.addEventListener("keydown", handlePromotionShortcut);
@@ -561,7 +569,11 @@ function renderSelectedBot(data) {
   elements.opponentAvatar.src = `/static/avatars/${encodeURIComponent(selectedBot.avatar)}`;
   elements.opponentAvatar.alt = `${selectedBot.label} avatar`;
   elements.opponentAvatar.hidden = false;
-  updateCommentary(data.commentary, data.commentary_trigger || "default");
+  updateCommentary(
+    data.commentary,
+    data.commentary_trigger || "default",
+    data.banter_exchange_index ?? null,
+  );
 }
 
 function renderBotSelector() {
@@ -577,12 +589,108 @@ function renderBotLockMessage() {
   }
 }
 
-function updateCommentary(line, trigger = "default") {
+function updateCommentary(line, trigger = "default", banterIndex = null) {
   if (typeof line !== "string" || !line.trim()) {
     return;
   }
   currentCommentary = line.trim();
   animationDirector.showCommentary(currentCommentary, trigger);
+  elements.banterStatus.textContent = "";
+  elements.banterStatus.hidden = true;
+  setBanterAvailability(banterIndex);
+}
+
+function setBanterAvailability(index) {
+  const previousIndex = banterExchangeIndex;
+  banterExchangeIndex = Number.isInteger(index) ? index : null;
+  if (banterExchangeIndex !== previousIndex) {
+    elements.banterInput.value = "";
+  }
+  const canChat =
+    banterExchangeIndex !== null && opponentSelected && gameActive && !banterBusy;
+  elements.banterForm.hidden = !canChat;
+  if (selectedBot.label) {
+    elements.banterInput.placeholder = `Reply to ${selectedBot.label}…`;
+    elements.banterInput.setAttribute(
+      "aria-label",
+      `Reply to ${selectedBot.label}`,
+    );
+  }
+  if (banterExchangeIndex === null) {
+    elements.banterInput.value = "";
+    elements.banterThinking.hidden = true;
+  }
+}
+
+async function submitBanter(event) {
+  event.preventDefault();
+  if (banterBusy || banterExchangeIndex === null) {
+    return;
+  }
+  const submittedExchangeIndex = banterExchangeIndex;
+  const reply = elements.banterInput.value.trim();
+  if (!reply) {
+    elements.banterInput.focus();
+    return;
+  }
+  banterBusy = true;
+  let retryAfterMs = 0;
+  elements.banterInput.disabled = true;
+  elements.banterSend.disabled = true;
+  elements.banterForm.hidden = true;
+  elements.banterThinking.hidden = false;
+  elements.banterStatus.hidden = true;
+  try {
+    const response = await fetch("/banter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        exchange_index: submittedExchangeIndex,
+        fen: game.fen(),
+        reply: reply.slice(0, 280),
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && typeof data.martin_response === "string" && data.martin_response.trim()) {
+      if (banterExchangeIndex === submittedExchangeIndex) {
+        updateCommentary(data.martin_response, "banter", null);
+      } else {
+        elements.banterStatus.textContent = `Martin replied: ${data.martin_response.trim()}`;
+        elements.banterStatus.hidden = false;
+      }
+    } else {
+      if (banterExchangeIndex === submittedExchangeIndex) {
+        setBanterAvailability(submittedExchangeIndex);
+        elements.banterInput.value = reply;
+      }
+      elements.banterStatus.textContent =
+        data.error || "Your reply could not be sent. Please try again.";
+      elements.banterStatus.hidden = false;
+      retryAfterMs = Math.max(
+        0,
+        Number(response.headers.get("Retry-After") || 0) * 1000,
+      );
+    }
+  } catch (error) {
+    if (banterExchangeIndex === submittedExchangeIndex) {
+      setBanterAvailability(submittedExchangeIndex);
+      elements.banterInput.value = reply;
+    }
+    elements.banterStatus.textContent =
+      "Your reply could not be sent. Please try again.";
+    elements.banterStatus.hidden = false;
+  } finally {
+    banterBusy = false;
+    elements.banterInput.disabled = false;
+    elements.banterSend.disabled = retryAfterMs > 0;
+    setBanterAvailability(banterExchangeIndex);
+    if (retryAfterMs > 0) {
+      window.setTimeout(() => {
+        elements.banterSend.disabled = false;
+      }, retryAfterMs);
+    }
+    elements.banterThinking.hidden = true;
+  }
 }
 
 function clearCommentary() {
@@ -590,6 +698,9 @@ function clearCommentary() {
   animationDirector.skip();
   elements.botCommentary.textContent = "";
   elements.botCommentary.hidden = true;
+  elements.banterStatus.textContent = "";
+  elements.banterStatus.hidden = true;
+  setBanterAvailability(null);
 }
 
 function showNextIdleCommentary() {
@@ -641,9 +752,9 @@ function stopThinkingCommentary() {
   stopIdleCommentary();
 }
 
-function restoreCommentary(line) {
+function restoreCommentary(line, banterIndex = null) {
   if (line) {
-    updateCommentary(line);
+    updateCommentary(line, "default", banterIndex);
   } else {
     clearCommentary();
   }
@@ -1284,7 +1395,7 @@ async function requestEngineMove() {
       elements.lockedPill.hidden = true;
       elements.botSelectionStatus.textContent = "Reconnect to continue this game, or choose New game.";
       lastError = "Your opponent connection was lost. Your board is safe. Reconnect to continue, or choose New game.";
-      restoreCommentary(commentaryBeforeThinking);
+      restoreCommentary(commentaryBeforeThinking, data.banter_exchange_index ?? null);
       return;
     }
     if (!response.ok) {
@@ -1293,9 +1404,16 @@ async function requestEngineMove() {
 
     stopThinkingCommentary();
     if (typeof data.commentary === "string" && data.commentary.trim()) {
-      updateCommentary(data.commentary, data.commentary_trigger || "default");
+      updateCommentary(
+        data.commentary,
+        data.commentary_trigger || "default",
+        data.banter_exchange_index ?? null,
+      );
     } else {
-      restoreCommentary(commentaryBeforeThinking);
+      restoreCommentary(
+        commentaryBeforeThinking,
+        data.banter_exchange_index ?? null,
+      );
     }
 
     if (!data.engine_move) {
