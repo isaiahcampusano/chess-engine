@@ -158,7 +158,7 @@ class WebAppTests(unittest.TestCase):
         expected = {
             "rookie": (1, 0.15),
             "hustler": (2, 0.25),
-            "professor": (5, 0.0),
+            "professor": (3, 0.05),
             "martin": (3, 0.08),
         }
         self.assertEqual(set(web_app.BOTS), set(expected))
@@ -288,8 +288,8 @@ class WebAppTests(unittest.TestCase):
         )
         searched_board = search.call_args.args[0]
         self.assertEqual(searched_board.fen(), board.fen())
-        self.assertEqual(search.call_args.kwargs["depth"], 5)
-        self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 8.0)
+        self.assertEqual(search.call_args.kwargs["depth"], 3)
+        self.assertEqual(search.call_args.kwargs["time_limit_seconds"], 5.0)
 
     def test_player_blunder_commentary_uses_static_evaluations(self) -> None:
         board = chess.Board()
@@ -422,7 +422,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(blocked_move.status_code, 409)
         self.assertEqual(selection.status_code, 200)
         self.assertEqual(move_response.status_code, 200)
-        self.assertEqual(search.call_args.kwargs["depth"], 5)
+        self.assertEqual(search.call_args.kwargs["depth"], 3)
 
     def test_end_game_releases_the_locked_opponent(self) -> None:
         response = self.client.post(
@@ -598,7 +598,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(chess.Move.from_uci(payload["engine_move"]), board.legal_moves)
         self.assertEqual(payload["depth"], 0)
         self.assertTrue(payload["timed_out"])
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [5])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [3])
         self.assertTrue(
             all(
                 call.kwargs["time_limit_seconds"] == web_app.BOTS["professor"]["time_limit_seconds"]
@@ -623,7 +623,7 @@ class WebAppTests(unittest.TestCase):
         )
         self.assertEqual(payload["depth"], 0)
         self.assertTrue(payload["timed_out"])
-        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [5])
+        self.assertEqual([call.kwargs["depth"] for call in search.call_args_list], [3])
 
     def test_move_endpoint_does_not_restart_search_after_none_result(self) -> None:
         with patch("app.choose_move_with_skill", return_value=None) as search:

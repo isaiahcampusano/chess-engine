@@ -16,7 +16,7 @@ class BotProfileTests(unittest.TestCase):
         expected = {
             "rookie": (1, .15, "never", 0., 1.),
             "hustler": (2, .25, "sometimes", .5, 2.),
-            "professor": (5, 0., "always", 1., 8.),
+            "professor": (3, .05, "always", 1., 5.),
             "martin": (3, .08, "sometimes", .5, 3.),
         }
         self.assertEqual(set(BOT_CONFIGS), set(expected))
