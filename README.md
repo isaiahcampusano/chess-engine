@@ -14,11 +14,12 @@ personality metadata and browser move selection:
 | --- | ---: | ---: | --- | ---: |
 | Rookie Randy | 1 | 15% | Never | 1 second |
 | Sandbag Sam | 2 | 25% | 50% probability | 2 seconds |
-| The Professor | 5 | 0% | Always when available | 8 seconds |
+| The Professor | 3 | 5% | Always when available | 5 seconds |
 | Martin | 3 | 8% | 50% probability | 3 seconds |
 
 Randy is a cheerful beginner. Sam calculates further but takes more risks.
-The Professor is the strongest, most consistent opponent. Martin combines
+The Professor searches more deeply than the novice opponents, plays the opening
+book whenever available, and occasionally makes mistakes. Martin combines
 shorter calculation with occasional mistakes and wisecracks. These settings
 produce different behavior; they are not calibrated Elo ratings.
 
